@@ -8,4 +8,6 @@ else
 . venv/bin/activate
 fi
 
+cd src
+
 python main.py

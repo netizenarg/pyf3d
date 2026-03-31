@@ -1,4 +1,15 @@
 #!/usr/bin/env python3
+
+WINDOW_WIDTH = 1280
+WINDOW_HEIGHT = 720
+MOUSE_SENSITIVITY = 0.002
+MOVEMENT_SPEED = 10.0
+PLAYER_HEIGHT = 1.5
+TERRAIN_SPACING = 1.0
+SHOOT_RANGE = 100.0
+TARGET_COUNT = 10
+
+
 import glfw
 from OpenGL.GL import *
 import numpy
@@ -11,15 +22,8 @@ from camera import Camera
 from shader import Shader, VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC
 from chunks import ChunkManager
 from target import Target
+from sky import Sky
 
-WINDOW_WIDTH = 1280
-WINDOW_HEIGHT = 720
-MOUSE_SENSITIVITY = 0.002
-MOVEMENT_SPEED = 10.0
-PLAYER_HEIGHT = 1.5
-TERRAIN_SPACING = 1.0
-SHOOT_RANGE = 100.0
-TARGET_COUNT = 10
 
 def main():
     if not glfw.init():
@@ -40,6 +44,7 @@ def main():
 
     camera = Camera(mouse_sensitivity=MOUSE_SENSITIVITY, movement_speed=MOVEMENT_SPEED, player_height=PLAYER_HEIGHT)
     chunk_manager = ChunkManager(chunk_size=32, load_radius=3, spacing=TERRAIN_SPACING)
+    sky = Sky(chunk_manager, cloud_count_per_chunk=5, snow_count=500)
 
     shader_3d = Shader(VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC)
     shader_crosshair = Shader(CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC)
@@ -124,6 +129,7 @@ def main():
 
         camera.process_keyboard(keys, dt)
         chunk_manager.update(camera.position)
+        sky.update(dt)
 
         glClearColor(0.1, 0.2, 0.3, 1.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -134,10 +140,15 @@ def main():
         shader_3d.set_mat4("uProjection", proj)
         shader_3d.set_vec3("uLightDir", light_dir)
 
+        sky.draw_background(view, proj, camera.position, glfw.get_time(), WINDOW_WIDTH, WINDOW_HEIGHT)
+
+        shader_3d.use()
         chunk_manager.draw(shader_3d)
 
         for target in targets:
             target.draw(shader_3d, view, proj, light_dir)
+
+        sky.draw_all(view, proj, camera.position, glfw.get_time())
 
         glDisable(GL_DEPTH_TEST)
         shader_crosshair.use()

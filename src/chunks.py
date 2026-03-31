@@ -184,6 +184,7 @@ class ChunkManager:
             self.generator = ChunkGenerator(chunk_size, spacing)
         else:
             self.generator = None  # fallback to sync generation if needed
+        self.chunks[(0,0)] = self._generate_sync(0,0)
 
     def _generate_sync(self, cx, cz):
         """Fallback synchronous generation (no multiprocessing)."""

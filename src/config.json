@@ -1,0 +1,13 @@
+{
+    "mouse_sensitivity": 1.0,
+    "movement_speed": 10.0,
+    "player_height": 1.5,
+    "terrain_spacing": 1.0,
+    "chunk_size": 32,
+    "load_radius": 3,
+    "cloud_count_per_chunk": 3,
+    "day_duration": 60.0,
+    "star_count": 500,
+    "snow_count": 500,
+    "snow_draw": false
+}

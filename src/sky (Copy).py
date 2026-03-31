@@ -147,26 +147,21 @@ class Sky:
         if not self.is_day:
             self.draw_stars(view, proj, current_time)
 
-        # Sun angle: 0 at dawn (0.25), π/2 at noon (0.5), π at dusk (0.75)
         sun_angle = (self.time_of_day - 0.25) * 2 * math.pi
-        # Direction from camera to sun
-        sun_dir = numpy.array([math.cos(sun_angle), math.sin(sun_angle), 0.0], dtype=numpy.float32)
-        sun_dir /= numpy.linalg.norm(sun_dir)
-        sun_world_pos = camera_pos + sun_dir * self.distance
+        sun_x = self.distance * math.cos(sun_angle)
+        sun_y = self.distance * math.sin(sun_angle)
+        sun_z = 0.0
+        sun_world_pos = numpy.array([sun_x, sun_y, sun_z], dtype=numpy.float32)
+        if sun_y > 0:
+            self.draw_celestial_sphere(view, proj, sun_world_pos, numpy.array([1.0, 0.6, 0.4], dtype=numpy.float32), 20.0)
 
-        if sun_dir[1] > 0:  # above horizon
-            self.draw_celestial_sphere(view, proj, sun_world_pos,
-                                    numpy.array([1.0, 0.6, 0.4], dtype=numpy.float32), 20.0)
-
-        # Moon angle = sun_angle + π
         moon_angle = sun_angle + math.pi
-        moon_dir = numpy.array([math.cos(moon_angle), math.sin(moon_angle), 0.0], dtype=numpy.float32)
-        moon_dir /= numpy.linalg.norm(moon_dir)
-        moon_world_pos = camera_pos + moon_dir * self.distance
-
-        if moon_dir[1] > 0:
-            self.draw_celestial_sphere(view, proj, moon_world_pos,
-                                    numpy.array([0.5, 0.5, 0.5], dtype=numpy.float32), 15.0)
+        moon_x = self.distance * math.cos(moon_angle)
+        moon_y = self.distance * math.sin(moon_angle)
+        moon_z = 0.0
+        moon_world_pos = numpy.array([moon_x, moon_y, moon_z], dtype=numpy.float32)
+        if moon_y > 0:
+            self.draw_celestial_sphere(view, proj, moon_world_pos, numpy.array([0.5, 0.5, 0.5], dtype=numpy.float32), 15.0)
 
         glDisable(GL_BLEND)
         glEnable(GL_DEPTH_TEST)

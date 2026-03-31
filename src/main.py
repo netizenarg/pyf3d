@@ -2,7 +2,6 @@
 
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 720
-MOUSE_SENSITIVITY = 1.0
 MOVEMENT_SPEED = 10.0
 PLAYER_HEIGHT = 1.5
 TERRAIN_SPACING = 1.0
@@ -10,7 +9,6 @@ SHOOT_RANGE = 100.0
 TARGET_COUNT = 10
 NEAR = 0.1
 FAR = 1000.0
-
 
 import glfw
 from OpenGL.GL import *
@@ -20,14 +18,29 @@ import random
 import sys
 import ctypes
 
+from config import Config
+from gui import Menu
 from camera import Camera
 from shader import Shader, VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC
 from chunks import ChunkManager
 from target import Target
 from sky import Sky
 
-
 def main():
+    # Load configuration
+    config = Config.load()
+    mouse_sensitivity = config["mouse_sensitivity"]
+    movement_speed = config["movement_speed"]
+    player_height = config["player_height"]
+    terrain_spacing = config["terrain_spacing"]
+    chunk_size = config["chunk_size"]
+    load_radius = config["load_radius"]
+    cloud_count_per_chunk = config["cloud_count_per_chunk"]
+    day_duration = config["day_duration"]
+    star_count = config["star_count"]
+    snow_count = config["snow_count"]
+    snow_draw = config["snow_draw"]
+
     if not glfw.init():
         sys.exit("Failed to initialize GLFW")
 
@@ -44,9 +57,18 @@ def main():
     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
     glEnable(GL_DEPTH_TEST)
 
-    camera = Camera(mouse_sensitivity=MOUSE_SENSITIVITY, movement_speed=MOVEMENT_SPEED, player_height=PLAYER_HEIGHT)
-    chunk_manager = ChunkManager(chunk_size=32, load_radius=3, spacing=TERRAIN_SPACING)
-    sky = Sky(chunk_manager, cloud_count_per_chunk=3, snow_count=500)
+    camera = Camera(mouse_sensitivity=mouse_sensitivity,
+                    movement_speed=movement_speed,
+                    player_height=player_height)
+    chunk_manager = ChunkManager(chunk_size=chunk_size,
+                                 load_radius=load_radius,
+                                 spacing=terrain_spacing)
+    sky = Sky(chunk_manager,
+              cloud_count_per_chunk=cloud_count_per_chunk,
+              star_count=star_count,
+              snow_count=snow_count,
+              snow_draw=snow_draw)
+    sky.day_duration = day_duration
 
     shader_3d = Shader(VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC)
     shader_crosshair = Shader(CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC)
@@ -79,8 +101,10 @@ def main():
     glEnableVertexAttribArray(0)
     glBindVertexArray(0)
 
+    menu = Menu(WINDOW_WIDTH, WINDOW_HEIGHT, config, camera)
     keys = {}
 
+    # Combined key callback
     def key_callback(window, key, scancode, action, mods):
         if action == glfw.PRESS:
             keys[key] = True
@@ -88,9 +112,20 @@ def main():
             keys[key] = False
         if key == glfw.KEY_ESCAPE:
             glfw.set_window_should_close(window, True)
+        if key == glfw.KEY_F9 and action == glfw.PRESS:
+            menu.active = not menu.active
+            if menu.active:
+                glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_NORMAL)
+            else:
+                glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
 
+    # Combined mouse button callback
     def mouse_button_callback(window, button, action, mods):
         if button == glfw.MOUSE_BUTTON_LEFT and action == glfw.PRESS:
+            if menu.active:
+                xpos, ypos = glfw.get_cursor_pos(window)
+                menu.handle_mouse(xpos, ypos, button)
+                return
             ray_dir = camera.front
             ray_origin = camera.position
             for target in targets:
@@ -109,6 +144,8 @@ def main():
 
     def mouse_callback(window, xpos, ypos):
         nonlocal last_x, last_y, first_mouse
+        if menu.active:
+            return
         if first_mouse:
             last_x = xpos
             last_y = ypos
@@ -148,7 +185,7 @@ def main():
         for target in targets:
             target.draw(shader_3d, view, proj, light_dir)
 
-        sky.draw_all(view, proj, camera.position, glfw.get_time())
+        sky.draw_foreground(view, proj, camera.position, glfw.get_time())
 
         glDisable(GL_DEPTH_TEST)
         shader_crosshair.use()
@@ -157,6 +194,8 @@ def main():
         glDrawArrays(GL_LINES, 0, 4)
         glBindVertexArray(0)
         glEnable(GL_DEPTH_TEST)
+
+        menu.draw()
 
         glfw.swap_buffers(window)
         glfw.poll_events()

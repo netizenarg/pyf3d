@@ -10,12 +10,13 @@ def get_height(x, z):
             0.2 * math.sin((x * 0.6 + z * 0.4) * 0.8)) * 2.0 + 0.5
 
 class Camera:
-    def __init__(self, position=None, mouse_sensitivity=0.002, movement_speed=10.0, player_height=1.5):
+    def __init__(self, position=None, mouse_sensitivity=0.002, movement_speed=10.0, player_height=1.5, rotate_only_horizontal=True):
         if position is None:
             position = numpy.array([0.0, player_height, 0.0])
         self.position = position
         self.yaw = -90.0
         self.pitch = 0.0
+        self.pitch_staticaly = rotate_only_horizontal
         self.front = numpy.array([0.0, 0.0, -1.0])
         self.up = numpy.array([0.0, 1.0, 0.0])
         self.right = numpy.array([1.0, 0.0, 0.0])
@@ -38,11 +39,12 @@ class Camera:
 
     def process_mouse(self, dx, dy):
         self.yaw += dx * self.mouse_sensitivity
-        self.pitch += dy * self.mouse_sensitivity
-        if self.pitch > 89.0:
-            self.pitch = 89.0
-        if self.pitch < -89.0:
-            self.pitch = -89.0
+        if not self.pitch_staticaly:
+            self.pitch += dy * self.mouse_sensitivity
+            if self.pitch > 89.0:
+                self.pitch = 89.0
+            if self.pitch < -89.0:
+                self.pitch = -89.0
         self.update_vectors()
 
     def process_keyboard(self, keys, dt):

@@ -3,12 +3,11 @@ import math
 import numpy
 import random
 
-
 def get_height(x, z):
     return (math.sin(x * 0.1) * math.cos(z * 0.1) +
-         0.3 * math.sin(x * 0.3 + 1.2) + 0.3 * math.cos(z * 0.3 + 2.4) +
-         0.2 * math.sin((x * 0.6 + z * 0.4) * 0.8)) * 2.0 + 0.5
-
+            0.3 * math.sin(x * 0.3 + 1.2) +
+            0.3 * math.cos(z * 0.3 + 2.4) +
+            0.2 * math.sin((x * 0.6 + z * 0.4) * 0.8)) * 2.0 + 0.5
 
 class Camera:
     def __init__(self, position=None, mouse_sensitivity=0.002, movement_speed=10.0, player_height=1.5):
@@ -22,6 +21,7 @@ class Camera:
         self.right = numpy.array([1.0, 0.0, 0.0])
         self.mouse_sensitivity = mouse_sensitivity
         self.movement_speed = movement_speed
+        self.player_height = player_height
         self.update_vectors()
 
     def update_vectors(self):
@@ -47,6 +47,10 @@ class Camera:
 
     def process_keyboard(self, keys, dt):
         speed = self.movement_speed * dt
+        # Store old position for potential collision recovery (optional)
+        old_pos = self.position.copy()
+
+        # Apply movement
         if keys.get(glfw.KEY_W, False):
             self.position += self.front * speed
         if keys.get(glfw.KEY_S, False):
@@ -55,6 +59,14 @@ class Camera:
             self.position -= self.right * speed
         if keys.get(glfw.KEY_D, False):
             self.position += self.right * speed
+
+        # Adjust Y to terrain height
+        self.adjust_height()
+
+    def adjust_height(self):
+        """Set the camera's Y position to ground + player height."""
+        ground_y = get_height(self.position[0], self.position[2])
+        self.position[1] = ground_y + self.player_height
 
     def get_view_matrix(self):
         f = self.front

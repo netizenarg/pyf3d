@@ -150,6 +150,7 @@ def main():
         glfw.swap_buffers(window)
         glfw.poll_events()
 
+    chunk_manager.shutdown()
     glfw.terminate()
 
 if __name__ == "__main__":

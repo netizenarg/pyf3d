@@ -51,7 +51,6 @@ out vec3 vColor;
 
 void main() {
     gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
-    // Simple shading: light from top‑left
     vec3 lightDir = normalize(vec3(1.0, 2.0, 1.0));
     vec3 normal = normalize(aNormal);
     float diff = max(dot(normal, lightDir), 0.2);
@@ -81,7 +80,6 @@ out float vAlpha;
 
 void main() {
     gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
-    // Simple alpha based on some factor (constant for now)
     vAlpha = 0.7;
 }
 """
@@ -93,6 +91,41 @@ out vec4 FragColor;
 
 void main() {
     FragColor = vec4(0.95, 0.95, 0.95, vAlpha);
+}
+"""
+
+# ------------------------------ Star Shader (static twinkling points) ------------------------------
+STAR_VERTEX_SHADER = """
+#version 330 core
+layout(location = 0) in vec3 aPos;
+uniform mat4 uView;
+uniform mat4 uProjection;
+uniform float uTime;
+
+out float vBrightness;
+
+void main() {
+    vec4 worldPos = vec4(aPos, 1.0);
+    gl_Position = uProjection * uView * worldPos;
+    // Use position as seed for twinkling
+    float seed = sin(aPos.x * 10.0 + aPos.y * 8.0 + aPos.z * 12.0);
+    float twinkle = 0.5 + 0.5 * sin(uTime * 2.0 + seed * 100.0);
+    vBrightness = 0.6 + 0.4 * twinkle;
+    gl_PointSize = 2.0 + twinkle * 1.5;
+}
+"""
+
+STAR_FRAGMENT_SHADER = """
+#version 330 core
+in float vBrightness;
+out vec4 FragColor;
+
+void main() {
+    vec2 coord = gl_PointCoord;
+    float dist = length(coord - vec2(0.5));
+    if (dist > 0.5) discard;
+    float alpha = (1.0 - dist * 2.0) * 0.8;
+    FragColor = vec4(1.0, 1.0, 1.0, alpha * vBrightness);
 }
 """
 
@@ -130,16 +163,14 @@ void main() {
 """
 
 class CloudBlob:
-    """A single cloud blob represented as a sphere."""
     def __init__(self, offset, size):
-        self.offset = offset   # relative to cloud center
+        self.offset = offset
         self.size = size
 
 class Cloud:
     def __init__(self, position, speed=0.1):
         self.position = position
         self.speed = speed
-        # Random direction in XZ plane
         self.direction = numpy.array([random.uniform(-1, 1), 0, random.uniform(-1, 1)], dtype=numpy.float32)
         norm = numpy.linalg.norm(self.direction)
         if norm > 0:
@@ -147,11 +178,9 @@ class Cloud:
         else:
             self.direction = numpy.array([1.0, 0.0, 0.0])
 
-        # Generate blobs (spheres)
         num_blobs = random.randint(5, 12)
         self.blobs = []
         for _ in range(num_blobs):
-            # Random offset in a disc of radius 4.0
             angle = random.uniform(0, 2 * math.pi)
             radius = random.uniform(0, 4.0)
             off_x = math.cos(angle) * radius
@@ -164,16 +193,31 @@ class Cloud:
         self.position += self.direction * self.speed * dt
 
 class Sky:
-    def __init__(self, chunk_manager, cloud_count_per_chunk=5, snow_count=500):
+    def __init__(self, chunk_manager, cloud_count_per_chunk=5, snow_count=500, star_count=500):
         self.chunk_manager = chunk_manager
         self.cloud_count_per_chunk = cloud_count_per_chunk
         self.clouds = {}
         self.snow_count = snow_count
+        self.star_count = star_count
         self.time_of_day = 0.0
         self.day_duration = 60.0
+        self.draw_testing_planet_circle = False   # disable test circle
+
+        # Generate static star positions on a sphere
+        self.star_positions = []
+        radius = 800.0
+        for _ in range(self.star_count):
+            theta = random.uniform(0, 2 * math.pi)
+            phi = math.acos(2 * random.uniform(0, 1) - 1)
+            x = radius * math.cos(theta) * math.sin(phi)
+            y = radius * math.sin(theta) * math.sin(phi)
+            z = radius * math.cos(phi)
+            self.star_positions.append(numpy.array([x, y, z], dtype=numpy.float32))
+
         self.init_shaders()
         self._setup_sky_vao()
-        self._setup_sphere_vao()     # for sun, moon, clouds
+        self._setup_sphere_vao()      # for sun, moon, clouds
+        self._setup_star_vao()
         self._setup_snow_vao()
 
     def init_shaders(self):
@@ -188,6 +232,10 @@ class Sky:
         self.cloud_sphere_shader = compileProgram(
             compileShader(CLOUD_SPHERE_VERTEX_SHADER, GL_VERTEX_SHADER),
             compileShader(CLOUD_SPHERE_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
+        )
+        self.star_shader = compileProgram(
+            compileShader(STAR_VERTEX_SHADER, GL_VERTEX_SHADER),
+            compileShader(STAR_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
         )
         self.snow_shader = compileProgram(
             compileShader(SNOW_VERTEX_SHADER, GL_VERTEX_SHADER),
@@ -240,7 +288,6 @@ class Sky:
         glEnable(GL_DEPTH_TEST)
 
     def draw_celestial_sphere(self, view, proj, world_pos, color, size):
-        """Draw a 3D sphere at world_pos with given color and size (radius)."""
         glUseProgram(self.celestial_shader)
         glUniformMatrix4fv(glGetUniformLocation(self.celestial_shader, "uView"), 1, GL_TRUE, view)
         glUniformMatrix4fv(glGetUniformLocation(self.celestial_shader, "uProjection"), 1, GL_TRUE, proj)
@@ -281,8 +328,19 @@ class Sky:
                     glDrawElements(GL_TRIANGLES, self._sphere_index_count, GL_UNSIGNED_INT, None)
         glBindVertexArray(0)
 
+    def draw_stars(self, view, proj, current_time):
+        glUseProgram(self.star_shader)
+        glUniformMatrix4fv(glGetUniformLocation(self.star_shader, "uView"), 1, GL_TRUE, view)
+        glUniformMatrix4fv(glGetUniformLocation(self.star_shader, "uProjection"), 1, GL_TRUE, proj)
+        glUniform1f(glGetUniformLocation(self.star_shader, "uTime"), current_time)
+
+        glEnable(GL_PROGRAM_POINT_SIZE)
+        glBindVertexArray(self._star_vao)
+        glDrawArrays(GL_POINTS, 0, self.star_count)
+        glBindVertexArray(0)
+        glDisable(GL_PROGRAM_POINT_SIZE)
+
     def draw_snow(self, view, proj, camera_pos, current_time):
-        # Generate fresh snow positions around the camera
         radius = 150.0
         positions = []
         for _ in range(self.snow_count):
@@ -313,14 +371,12 @@ class Sky:
         day_factor = max(0.0, min(1.0, 1.0 - 2.0 * abs(0.5 - self.time_of_day)))
         is_day = day_factor > 0.5
 
-        # Draw Sun / Moon (3D spheres) – fixed world positions
+        # Draw Sun / Moon (3D spheres)
         glDisable(GL_DEPTH_TEST)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE)
 
         distance = 200.0
-
-        # Sun angle: 0 at dawn (0.25), π/2 at noon (0.5), π at dusk (0.75)
         sun_angle = (self.time_of_day - 0.25) * 2 * math.pi
         sun_x = distance * math.cos(sun_angle)
         sun_y = distance * math.sin(sun_angle)
@@ -329,7 +385,7 @@ class Sky:
 
         if sun_y > 0:
             self.draw_celestial_sphere(view, proj, sun_world_pos,
-                                       numpy.array([1.0, 0.4, 0.4], dtype=numpy.float32), 20.0)
+                                       numpy.array([1.0, 0.6, 0.4], dtype=numpy.float32), 20.0)
 
         moon_angle = sun_angle + math.pi
         moon_x = distance * math.cos(moon_angle)
@@ -343,6 +399,15 @@ class Sky:
 
         glDisable(GL_BLEND)
         glEnable(GL_DEPTH_TEST)
+
+        # Stars – only at night
+        if not is_day:
+            glDisable(GL_DEPTH_TEST)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+            self.draw_stars(view, proj, current_time)
+            glDisable(GL_BLEND)
+            glEnable(GL_DEPTH_TEST)
 
         # Clouds – drawn with alpha blending
         glEnable(GL_BLEND)
@@ -376,9 +441,8 @@ class Sky:
         glBindVertexArray(0)
 
     def _setup_sphere_vao(self):
-        # Generate a UV sphere (latitude/longitude) with radius 1.
-        slices = 32   # number of longitudinal segments
-        stacks = 16   # number of latitudinal segments
+        slices = 32
+        stacks = 16
         vertices = []
         normals = []
         indices = []
@@ -430,6 +494,17 @@ class Sky:
 
         glBindVertexArray(0)
         self._sphere_index_count = len(indices)
+
+    def _setup_star_vao(self):
+        positions = numpy.array(self.star_positions, dtype=numpy.float32).flatten()
+        self._star_vao = glGenVertexArrays(1)
+        self._star_vbo = glGenBuffers(1)
+        glBindVertexArray(self._star_vao)
+        glBindBuffer(GL_ARRAY_BUFFER, self._star_vbo)
+        glBufferData(GL_ARRAY_BUFFER, positions.nbytes, positions, GL_STATIC_DRAW)
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(0))
+        glEnableVertexAttribArray(0)
+        glBindVertexArray(0)
 
     def _setup_snow_vao(self):
         positions = numpy.zeros(self.snow_count * 3, dtype=numpy.float32)

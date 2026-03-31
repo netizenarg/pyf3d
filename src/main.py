@@ -2,12 +2,14 @@
 
 WINDOW_WIDTH = 1280
 WINDOW_HEIGHT = 720
-MOUSE_SENSITIVITY = 0.002
+MOUSE_SENSITIVITY = 1.0
 MOVEMENT_SPEED = 10.0
 PLAYER_HEIGHT = 1.5
 TERRAIN_SPACING = 1.0
 SHOOT_RANGE = 100.0
 TARGET_COUNT = 10
+NEAR = 0.1
+FAR = 1000.0
 
 
 import glfw
@@ -44,7 +46,7 @@ def main():
 
     camera = Camera(mouse_sensitivity=MOUSE_SENSITIVITY, movement_speed=MOVEMENT_SPEED, player_height=PLAYER_HEIGHT)
     chunk_manager = ChunkManager(chunk_size=32, load_radius=3, spacing=TERRAIN_SPACING)
-    sky = Sky(chunk_manager, cloud_count_per_chunk=5, snow_count=500)
+    sky = Sky(chunk_manager, cloud_count_per_chunk=3, snow_count=500)
 
     shader_3d = Shader(VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC)
     shader_crosshair = Shader(CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC)
@@ -61,12 +63,10 @@ def main():
     proj = numpy.zeros((4, 4), dtype=numpy.float32)
     aspect = WINDOW_WIDTH / WINDOW_HEIGHT
     fov = math.radians(75.0)
-    near = 0.1
-    far = 200.0
     proj[0, 0] = 1.0 / (math.tan(fov / 2.0) * aspect)
     proj[1, 1] = 1.0 / math.tan(fov / 2.0)
-    proj[2, 2] = -(far + near) / (far - near)
-    proj[2, 3] = -(2.0 * far * near) / (far - near)
+    proj[2, 2] = -(FAR + NEAR) / (FAR - NEAR)
+    proj[2, 3] = -(2.0 * FAR * NEAR) / (FAR - NEAR)
     proj[3, 2] = -1.0
 
     crosshair_verts = numpy.array([-10.0, 0.0, 10.0, 0.0, 0.0, -10.0, 0.0, 10.0], dtype=numpy.float32)

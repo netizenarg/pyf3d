@@ -38,25 +38,25 @@ layout(location = 1) in vec3 aNormal;
 uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
-uniform vec3 uColor;
+uniform vec3 uLightDir;
 out vec3 vColor;
 
 void main() {
     gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
-    vec3 lightDir = normalize(vec3(1.0, 2.0, 1.0));
     vec3 normal = normalize(aNormal);
-    float diff = max(dot(normal, lightDir), 0.2);
-    vColor = uColor * diff;
+    float diff = max(dot(normal, normalize(uLightDir)), 0.2);
+    vColor = vec3(1.0) * diff;   // base white, multiplied by diffuse
 }
 """
 
 CELESTIAL_FRAGMENT_SHADER = """
 #version 330 core
 in vec3 vColor;
+uniform vec3 uColor;
 out vec4 FragColor;
 
 void main() {
-    FragColor = vec4(vColor, 1.0);
+    FragColor = vec4(vColor * uColor, 1.0);
 }
 """
 

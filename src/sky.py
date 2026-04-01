@@ -70,10 +70,42 @@ class Sky:
         self._setup_snow_vao()
 
     @property
+    def day_factor(self):
+        return max(0.0, min(1.0, 1.0 - 2.0 * abs(0.5 - self.time_of_day)))
+
+    @property
     def is_day(self):
-        day_factor = max(0.0, min(1.0, 1.0 - 2.0 * abs(0.5 - self.time_of_day)))
-        self.is_day_cached = day_factor > 0.5
+        self.is_day_cached = self.day_factor > 0.5
         return self.is_day_cached
+
+    def get_rotation_view(self, full_view):
+        """Extract the 3x3 rotation part from a 4x4 view matrix."""
+        rot_view = numpy.eye(4, dtype=numpy.float32)
+        rot_view[0:3, 0:3] = full_view[0:3, 0:3]
+        return rot_view
+
+    def get_sun_direction(self):
+        """Return normalized direction from camera to sun."""
+        sun_angle = (self.time_of_day - 0.25) * 2 * math.pi
+        return numpy.array([math.cos(sun_angle), math.sin(sun_angle), 0.0], dtype=numpy.float32)
+
+    def get_combined_light(self, moon_max_intensity=0.5):
+        sun_dir = self.get_sun_direction()
+        sun_intensity = self.day_factor
+        if sun_dir[1] <= 0:
+            sun_intensity = 0
+        moon_angle = (self.time_of_day - 0.25) * 2 * math.pi + math.pi
+        moon_dir = numpy.array([math.cos(moon_angle), math.sin(moon_angle), 0.0], dtype=numpy.float32)
+        if moon_dir[1] <= 0:   # moon below horizon
+            moon_intensity = 0
+        else:
+            moon_intensity = (1 - self.day_factor) * moon_max_intensity
+        combined = sun_dir * sun_intensity + moon_dir * moon_intensity
+        intensity = numpy.linalg.norm(combined)
+        if intensity < 0.01:
+            return numpy.array([0.0, 1.0, 0.0], dtype=numpy.float32), 0.0
+        light_dir = combined / intensity
+        return light_dir, intensity
 
     def init_shaders(self):
         self.sky_shader = compileProgram(
@@ -131,52 +163,12 @@ class Sky:
             clouds.append(Cloud(numpy.array([x, y, z], dtype=numpy.float32), speed))
         self.clouds[key] = clouds
 
-    def draw_background(self, view, proj, camera_pos, current_time, screen_width, screen_height):
-        day_factor = max(0.0, min(1.0, 1.0 - 2.0 * abs(0.5 - self.time_of_day)))
-        glDisable(GL_DEPTH_TEST)
-        glUseProgram(self.sky_shader)
-        glUniform1f(glGetUniformLocation(self.sky_shader, "uDayFactor"), day_factor)
-        glUniform2f(glGetUniformLocation(self.sky_shader, "uScreenSize"), screen_width, screen_height)
-        glBindVertexArray(self._sky_vao)
-        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, None)
-        glBindVertexArray(0)
-
-        glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE)
-
-        if not self.is_day:
-            self.draw_stars(view, proj, current_time)
-
-        # Sun angle: 0 at dawn (0.25), π/2 at noon (0.5), π at dusk (0.75)
-        sun_angle = (self.time_of_day - 0.25) * 2 * math.pi
-        # Direction from camera to sun
-        sun_dir = numpy.array([math.cos(sun_angle), math.sin(sun_angle), 0.0], dtype=numpy.float32)
-        sun_dir /= numpy.linalg.norm(sun_dir)
-        sun_world_pos = camera_pos + sun_dir * self.distance
-
-        if sun_dir[1] > 0:  # above horizon
-            self.draw_celestial_sphere(view, proj, sun_world_pos,
-                                    numpy.array([1.0, 0.6, 0.4], dtype=numpy.float32), 20.0)
-
-        # Moon angle = sun_angle + π
-        moon_angle = sun_angle + math.pi
-        moon_dir = numpy.array([math.cos(moon_angle), math.sin(moon_angle), 0.0], dtype=numpy.float32)
-        moon_dir /= numpy.linalg.norm(moon_dir)
-        moon_world_pos = camera_pos + moon_dir * self.distance
-
-        if moon_dir[1] > 0:
-            self.draw_celestial_sphere(view, proj, moon_world_pos,
-                                    numpy.array([0.5, 0.5, 0.5], dtype=numpy.float32), 15.0)
-
-        glDisable(GL_BLEND)
-        glEnable(GL_DEPTH_TEST)
-
-    def draw_celestial_sphere(self, view, proj, world_pos, color, size):
+    def draw_celestial_sphere(self, view, proj, world_pos, color, size, light_dir):
         glUseProgram(self.celestial_shader)
         glUniformMatrix4fv(glGetUniformLocation(self.celestial_shader, "uView"), 1, GL_TRUE, view)
         glUniformMatrix4fv(glGetUniformLocation(self.celestial_shader, "uProjection"), 1, GL_TRUE, proj)
         glUniform3fv(glGetUniformLocation(self.celestial_shader, "uColor"), 1, color)
-
+        glUniform3fv(glGetUniformLocation(self.celestial_shader, "uLightDir"), 1, light_dir)
         model = numpy.eye(4, dtype=numpy.float32)
         model[0, 3] = world_pos[0]
         model[1, 3] = world_pos[1]
@@ -185,7 +177,6 @@ class Sky:
         model[1, 1] = size
         model[2, 2] = size
         glUniformMatrix4fv(glGetUniformLocation(self.celestial_shader, "uModel"), 1, GL_TRUE, model)
-
         glBindVertexArray(self._sphere_vao)
         glDrawElements(GL_TRIANGLES, self._sphere_index_count, GL_UNSIGNED_INT, None)
         glBindVertexArray(0)
@@ -214,10 +205,11 @@ class Sky:
 
     def draw_stars(self, view, proj, current_time):
         glUseProgram(self.star_shader)
-        glUniformMatrix4fv(glGetUniformLocation(self.star_shader, "uView"), 1, GL_TRUE, view)
+        # Use only the rotation part of the view matrix
+        rot_view = self.get_rotation_view(view)
+        glUniformMatrix4fv(glGetUniformLocation(self.star_shader, "uView"), 1, GL_TRUE, rot_view)
         glUniformMatrix4fv(glGetUniformLocation(self.star_shader, "uProjection"), 1, GL_TRUE, proj)
         glUniform1f(glGetUniformLocation(self.star_shader, "uTime"), current_time)
-
         glEnable(GL_PROGRAM_POINT_SIZE)
         glBindVertexArray(self._star_vao)
         glDrawArrays(GL_POINTS, 0, self.star_count)
@@ -251,19 +243,52 @@ class Sky:
         glBindVertexArray(0)
         glDisable(GL_PROGRAM_POINT_SIZE)
 
+    def draw_background(self, view, proj, camera_pos, current_time, screen_width, screen_height):
+        glDisable(GL_DEPTH_TEST)
+        glUseProgram(self.sky_shader)
+        glUniform1f(glGetUniformLocation(self.sky_shader, "uDayFactor"), self.day_factor)
+        glUniform2f(glGetUniformLocation(self.sky_shader, "uScreenSize"), screen_width, screen_height)
+        glBindVertexArray(self._sky_vao)
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, None)
+        glBindVertexArray(0)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+        if not self.is_day:
+            self.draw_stars(view, proj, current_time)
+        sun_angle = (self.time_of_day - 0.25) * 2 * math.pi
+        sun_dir = numpy.array([math.cos(sun_angle), math.sin(sun_angle), 0.0], dtype=numpy.float32)
+        sun_dir /= numpy.linalg.norm(sun_dir)
+        if sun_dir[1] > 0:  # above horizon
+            sun_world_pos = camera_pos + sun_dir * self.distance
+            sun_light_dir = numpy.array([1.0, 2.0, 1.0], dtype=numpy.float32)
+            sun_light_dir /= numpy.linalg.norm(sun_light_dir)
+            self.draw_celestial_sphere(view, proj, sun_world_pos,
+                                    numpy.array([1.0, 0.6, 0.4], dtype=numpy.float32), 20.0, sun_light_dir)
+        glDisable(GL_BLEND)
+        moon_angle = sun_angle + math.pi
+        moon_dir = numpy.array([math.cos(moon_angle), math.sin(moon_angle), 0.0], dtype=numpy.float32)
+        moon_dir /= numpy.linalg.norm(moon_dir)
+        if moon_dir[1] > 0:
+            moon_world_pos = camera_pos + moon_dir * self.distance
+            moon_light_dir = numpy.array([0.0, 1.0, 0.0], dtype=numpy.float32)  # light from below
+            self.draw_celestial_sphere(view, proj, moon_world_pos,
+                                    numpy.array([0.9, 0.9, 0.9], dtype=numpy.float32), 15.0, moon_light_dir)
+        glEnable(GL_DEPTH_TEST)
+
     def draw_foreground(self, view, proj, camera_pos, current_time):
         # Clouds – drawn with alpha blending
         glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        self.draw_clouds(view, proj, camera_pos)
-        glDisable(GL_BLEND)
+        if self.is_day:
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            self.draw_clouds(view, proj, camera_pos)
         if self.snow_draw:
             glDisable(GL_DEPTH_TEST)
-            glEnable(GL_BLEND)
+            #glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE)
             self.draw_snow(view, proj, camera_pos, current_time)
-            glDisable(GL_BLEND)
+            #glDisable(GL_BLEND)
             glEnable(GL_DEPTH_TEST)
+        glDisable(GL_BLEND)
 
     # ------------------------------ VAO Setup ------------------------------
     def _setup_sky_vao(self):

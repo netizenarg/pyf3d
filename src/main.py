@@ -20,6 +20,7 @@ import ctypes
 
 from config import Config
 from gui import Menu
+from gui_stats import StatsPanel
 from compass import Compass
 from camera import Camera
 from shader import Shader, VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC
@@ -42,6 +43,7 @@ def main():
     snow_count = config["snow_count"]
     snow_draw = config["snow_draw"]
     draw_compass = config.get("draw_compass", False)
+    draw_stats = config.get("draw_stats", True)
 
     if not glfw.init():
         sys.exit("Failed to initialize GLFW")
@@ -62,6 +64,7 @@ def main():
     camera = Camera(mouse_sensitivity=mouse_sensitivity,
                     movement_speed=movement_speed,
                     player_height=player_height)
+
     chunk_manager = ChunkManager(chunk_size=chunk_size,
                                  load_radius=load_radius,
                                  spacing=terrain_spacing)
@@ -74,9 +77,6 @@ def main():
 
     shader_3d = Shader(VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC)
     shader_crosshair = Shader(CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC)
-
-    light_dir = numpy.array([1.0, 2.0, 1.0], dtype=numpy.float32)
-    light_dir = light_dir / numpy.linalg.norm(light_dir)
 
     targets = []
     for _ in range(TARGET_COUNT):
@@ -103,10 +103,9 @@ def main():
     glEnableVertexAttribArray(0)
     glBindVertexArray(0)
 
+    compass = Compass(WINDOW_WIDTH, WINDOW_HEIGHT, camera, draw_compass)
+    stats_panel = StatsPanel(WINDOW_WIDTH, WINDOW_HEIGHT, draw_stats)
     menu = Menu(WINDOW_WIDTH, WINDOW_HEIGHT, config, camera)
-
-    if draw_compass:
-        compass = Compass(WINDOW_WIDTH, WINDOW_HEIGHT, camera)
 
     keys = {}
 
@@ -118,12 +117,17 @@ def main():
             keys[key] = False
         if key == glfw.KEY_ESCAPE:
             glfw.set_window_should_close(window, True)
-        if key == glfw.KEY_F9 and action == glfw.PRESS:
-            menu.active = not menu.active
-            if menu.active:
-                glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_NORMAL)
-            else:
-                glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
+        if action == glfw.PRESS:
+            if key == glfw.KEY_F9:
+                menu.active = not menu.active
+                if menu.active:
+                    glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_NORMAL)
+                else:
+                    glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
+            elif key == glfw.KEY_F10:
+                compass.enabled = not compass.enabled
+            elif key == glfw.KEY_F11:
+                stats_panel.enabled = not stats_panel.enabled
 
     # Combined mouse button callback
     def mouse_button_callback(window, button, action, mods):
@@ -172,7 +176,28 @@ def main():
 
         camera.process_keyboard(keys, dt)
         chunk_manager.update(camera.position)
+
         sky.update(dt)
+        light_dir, light_intensity = sky.get_combined_light()
+
+        # Keep track of previous position
+        if 'prev_pos' not in locals():
+            prev_pos = camera.position.copy()
+        # Compute speed
+        speed = numpy.linalg.norm(camera.position - prev_pos) / dt if dt > 0 else 0.0
+        prev_pos = camera.position.copy()
+
+        # Update stats_panel values
+        if stats_panel.enabled:
+            stats_panel.update(
+                position=camera.position,
+                speed=speed,
+                life_percent=100.0,
+                mana_percent=100.0,
+                weapon_name="Rifle",
+                ammo_count=100,
+                familiar_name=""
+            )
 
         glClearColor(0.1, 0.2, 0.3, 1.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -182,6 +207,7 @@ def main():
         shader_3d.set_mat4("uView", view)
         shader_3d.set_mat4("uProjection", proj)
         shader_3d.set_vec3("uLightDir", light_dir)
+        shader_3d.set_float("uLightIntensity", light_intensity)
 
         sky.draw_background(view, proj, camera.position, glfw.get_time(), WINDOW_WIDTH, WINDOW_HEIGHT)
 
@@ -201,10 +227,9 @@ def main():
         glBindVertexArray(0)
         glEnable(GL_DEPTH_TEST)
 
+        compass.draw()
+        stats_panel.draw()
         menu.draw()
-
-        if draw_compass:
-            compass.draw()
 
         glfw.swap_buffers(window)
         glfw.poll_events()

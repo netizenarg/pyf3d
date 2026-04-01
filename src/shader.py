@@ -36,12 +36,18 @@ uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
 uniform vec3 uLightDir;
+uniform float uLightIntensity;
 
 out vec3 vColor;
 
 void main() {
     vec3 normal = normalize(aNormal);
-    float diff = max(dot(normal, normalize(uLightDir)), 0.2);
+    vec3 lightDir = normalize(uLightDir);
+    float diff = max(dot(normal, lightDir), 0.0);
+    diff = diff * uLightIntensity;
+    float ambient = 0.1 * (0.2 + 0.8 * uLightIntensity);
+    diff = max(diff, ambient);
+
     float h = aPos.y;
     vColor = mix(vec3(0.3, 0.6, 0.2), vec3(0.5, 0.4, 0.2), clamp((h + 2.0) / 6.0, 0.0, 1.0));
     vColor *= diff;

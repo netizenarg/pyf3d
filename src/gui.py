@@ -19,27 +19,45 @@ class Menu:
         self.camera = camera
         self.active = False
 
-        # Layout
+        # Layout – all y‑coordinates are top‑origin (0 = top)
         self.panel_x = 50
-        self.panel_y = 50
-        self.panel_w = 400
+        self.panel_y = 50                     # top edge of panel
+        self.panel_w = 500
         self.panel_h = 250
         self.button_h = 30
-        self.button_spacing = 10
+        self.button_spacing = 15
 
-        y = self.panel_y + self.panel_h - 40
+        # Title bar occupies the top 40 pixels of the panel
+        title_height = 40
+        self.title_bar_y = self.panel_y         # top edge of title bar
+        self.title_text = "Settings"
+
+        # Close button (X) in top‑right corner of title bar
+        close_size = 30
+        self.close_button = (self.panel_x + self.panel_w - close_size - 10,
+                             self.panel_y + (title_height - close_size) // 2,
+                             close_size, close_size,
+                             self.close)
+
+        # First setting row starts 10 pixels below title bar
+        start_y = self.panel_y + title_height + 10
+
         self.settings = [
-            ("Mouse Sens", "mouse_sensitivity", self.panel_x + 10, y, 200, self.button_h,
+            ("Mouse Sens", "mouse_sensitivity", self.panel_x + 10, start_y, 350, self.button_h,
              lambda: self.change_setting("mouse_sensitivity", 0.1),
              lambda: self.change_setting("mouse_sensitivity", -0.1)),
-            ("Move Speed", "movement_speed", self.panel_x + 10, y - self.button_h - self.button_spacing, 200, self.button_h,
+            ("Move Speed", "movement_speed", self.panel_x + 10, start_y + self.button_h + self.button_spacing, 350, self.button_h,
              lambda: self.change_setting("movement_speed", 1.0),
              lambda: self.change_setting("movement_speed", -1.0)),
-            ("Player Height", "player_height", self.panel_x + 10, y - 2*(self.button_h + self.button_spacing), 200, self.button_h,
+            ("Player Height", "player_height", self.panel_x + 10, start_y + 2*(self.button_h + self.button_spacing), 350, self.button_h,
              lambda: self.change_setting("player_height", 0.1),
              lambda: self.change_setting("player_height", -0.1)),
         ]
-        self.save_button = (self.panel_x + 10, y - 3*(self.button_h + self.button_spacing), 150, self.button_h, self.close)
+        # Save button below the last setting
+        self.save_button = (self.panel_x + 10,
+                            start_y + 3*(self.button_h + self.button_spacing) + 10,
+                            150, self.button_h,
+                            self.close)
 
         self.buttons = []
         self.init_ui()
@@ -54,23 +72,29 @@ class Menu:
             compileShader(TEXT_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
         )
 
-        # Common quad VAO (position + texcoord) – triangle strip order
+        # Common quad VAO (position + texcoord) – with indices for GL_TRIANGLES
         quad_verts = numpy.array([
             -0.5, -0.5,  0.0, 0.0,
              0.5, -0.5,  1.0, 0.0,
              0.5,  0.5,  1.0, 1.0,
             -0.5,  0.5,  0.0, 1.0,
         ], dtype=numpy.float32)
+        quad_indices = numpy.array([0,1,2, 0,2,3], dtype=numpy.uint32)
+
         self.quad_vao = glGenVertexArrays(1)
         self.quad_vbo = glGenBuffers(1)
+        self.quad_ebo = glGenBuffers(1)
         glBindVertexArray(self.quad_vao)
         glBindBuffer(GL_ARRAY_BUFFER, self.quad_vbo)
         glBufferData(GL_ARRAY_BUFFER, quad_verts.nbytes, quad_verts, GL_STATIC_DRAW)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.quad_ebo)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, quad_indices.nbytes, quad_indices, GL_STATIC_DRAW)
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(0))
         glEnableVertexAttribArray(0)
         glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(8))
         glEnableVertexAttribArray(1)
         glBindVertexArray(0)
+        self.quad_index_count = 6
 
         # Font texture
         self.font_tex = self._create_font_texture()
@@ -92,6 +116,10 @@ class Menu:
         self.text_uFontTexture = glGetUniformLocation(self.text_shader, "uFontTexture")
 
     def init_ui(self):
+        # Add close button
+        self.buttons.append(((self.close_button[0], self.close_button[1],
+                              self.close_button[2], self.close_button[3]),
+                             self.close_button[4]))
         for label, key, x, y, w, h, inc_action, dec_action in self.settings:
             inc_rect = (x + w - 50, y, 25, h)
             dec_rect = (x + w - 25, y, 25, h)
@@ -107,9 +135,7 @@ class Menu:
         cell_h = 8
         tex_w = cols * cell_w
         tex_h = rows * cell_h
-
         texture_data = numpy.zeros((tex_h, tex_w, 4), dtype=numpy.uint8)
-
         for code in range(32, 128):
             row = (code - 32) // cols
             col = (code - 32) % cols
@@ -121,7 +147,6 @@ class Menu:
                         texture_data[row * cell_h + y, col * cell_w + x] = [255, 255, 255, 255]
                     else:
                         texture_data[row * cell_h + y, col * cell_w + x] = [0, 0, 0, 0]
-
         tex_id = glGenTextures(1)
         glBindTexture(GL_TEXTURE_2D, tex_id)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, tex_w, tex_h, 0, GL_RGBA, GL_UNSIGNED_BYTE, texture_data)
@@ -146,19 +171,20 @@ class Menu:
         elif key == "player_height":
             self.camera.player_height = new_val
             self.camera.adjust_height()
-        print(f"{key} now: {new_val}")
+        print(f"Clicked {key} +/- : new value = {new_val}")
 
     def close(self):
         import config
         config.Config.save(self.config)
         self.active = False
+        print("Menu closed, settings saved.")
 
     def handle_mouse(self, xpos, ypos, button):
         if not self.active or button != glfw.MOUSE_BUTTON_LEFT:
             return False
-        y = self.height - ypos
-        for (x, yb, w, h), action in self.buttons:
-            if x <= xpos <= x + w and yb <= y <= yb + h:
+        # ypos is already top-origin (0 at top)
+        for (x, y, w, h), action in self.buttons:
+            if x <= xpos <= x + w and y <= ypos <= y + h:
                 action()
                 return True
         return False
@@ -179,6 +205,16 @@ class Menu:
         glUniform4f(self.rect_uColor, 0.2, 0.2, 0.2, 0.8)
         self._draw_rect(self.panel_x, self.panel_y, self.panel_w, self.panel_h)
 
+        # Title bar background
+        title_height = 40
+        glUniform4f(self.rect_uColor, 0.3, 0.3, 0.3, 0.9)
+        self._draw_rect(self.panel_x, self.panel_y, self.panel_w, title_height)
+
+        # Close button background
+        cx, cy, cw, ch, _ = self.close_button
+        glUniform4f(self.rect_uColor, 0.6, 0.2, 0.2, 0.9)
+        self._draw_rect(cx, cy, cw, ch)
+
         # Setting backgrounds
         for label, key, x, y, w, h, inc_action, dec_action in self.settings:
             glUniform4f(self.rect_uColor, 0.5, 0.5, 0.5, 0.9)
@@ -198,43 +234,60 @@ class Menu:
         glUniform3f(self.text_uColor, 1.0, 1.0, 1.0)
 
         char_size = 12
-        off_x = 5
-        off_y = 8
+
+        # Title text (centered in title bar)
+        title_width = len(self.title_text) * char_size
+        title_x = self.panel_x + (self.panel_w - title_width) // 2
+        title_center_y = self.panel_y + (title_height - char_size) // 2
+        self._draw_text(self.title_text, title_x, title_center_y, char_size, uppercase=True)
 
         for label, key, x, y, w, h, inc_action, dec_action in self.settings:
-            self._draw_text(label, x + off_x, y + h - off_y, char_size)
+            y_center = y + (h - char_size) // 2
+            self._draw_text(label, x + 5, y_center, char_size, uppercase=True)
             val_str = f"{self.config[key]:.1f}"
-            self._draw_text(val_str, x + w - 80, y + h - off_y, char_size)
-            self._draw_text("+", x + w - 50, y + h - off_y, char_size)
-            self._draw_text("-", x + w - 25, y + h - off_y, char_size)
+            self._draw_text(val_str, x + w - 110, y_center, char_size, uppercase=False)
+            self._draw_text("+", x + w - 55, y_center, char_size, uppercase=False)
+            self._draw_text("-", x + w - 30, y_center, char_size, uppercase=False)
 
+        # Close button text (X)
+        cx, cy, cw, ch, _ = self.close_button
+        y_center = cy + (ch - char_size) // 2
+        self._draw_text("X", cx + (cw - char_size) // 2, y_center, char_size, uppercase=True)
+
+        # Save button text
         sx, sy, sw, sh, _ = self.save_button
-        self._draw_text("Save", sx + sw//2 - 25, sy + sh - off_y, char_size)
+        y_center = sy + (sh - char_size) // 2
+        save_text = "Save"
+        text_width = len(save_text) * char_size
+        self._draw_text(save_text, sx + (sw - text_width) // 2, y_center, char_size, uppercase=True)
 
         glDisable(GL_BLEND)
         glEnable(GL_DEPTH_TEST)
 
     def _draw_rect(self, x, y, w, h):
-        glUniform2f(self.rect_uOffset, x + w/2, y + h/2)
+        """Draw rectangle with top‑origin coordinates (0 = top)."""
+        # Convert to bottom‑origin for OpenGL
+        y_bottom = self.height - (y + h)
+        glUniform2f(self.rect_uOffset, x + w/2, y_bottom + h/2)
         glUniform2f(self.rect_uScale, w, h)
         glBindVertexArray(self.quad_vao)
-        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
+        glDrawElements(GL_TRIANGLES, self.quad_index_count, GL_UNSIGNED_INT, None)
         glBindVertexArray(0)
 
-    def _draw_text(self, text, x, y, size):
+    def _draw_text(self, text, x, y, size, uppercase=True):
+        """Draw text with top‑origin coordinates (0 = top). y is the baseline (center of characters)."""
         glBindVertexArray(self.quad_vao)
         for i, ch in enumerate(text):
             code = ord(ch)
+            if uppercase and 97 <= code <= 122:
+                code -= 32
             if code < 32 or code > 127:
                 continue
             idx = code - 32
             cols = 16
             rows = 8
-            cell_w = 8
-            cell_h = 8
             row = idx // cols
             col = idx % cols
-            # Texture coordinates of the character in the atlas
             u0 = col / cols
             v0 = row / rows
             u1 = (col + 1) / cols
@@ -243,8 +296,9 @@ class Menu:
             glUniform4f(self.text_uTexRect, *tex_rect)
 
             pos_x = x + i * size
-            pos_y = y
-            glUniform2f(self.text_uOffset, pos_x + size/2, pos_y + size/2)
+            # Convert y from top‑origin to bottom‑origin and compute center
+            y_center = self.height - (y + size/2)
+            glUniform2f(self.text_uOffset, pos_x + size/2, y_center)
             glUniform2f(self.text_uScale, size, size)
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4)
+            glDrawElements(GL_TRIANGLES, self.quad_index_count, GL_UNSIGNED_INT, None)
         glBindVertexArray(0)

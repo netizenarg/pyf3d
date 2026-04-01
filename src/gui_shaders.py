@@ -20,7 +20,7 @@ void main() {
 }
 """
 
-# ------------------------------ Text Shader ------------------------------
+# ------------------------------ Text Shader (flip only vertical) ------------------------------
 TEXT_VERTEX_SHADER = """
 #version 330 core
 layout(location = 0) in vec2 aPos;
@@ -33,7 +33,8 @@ out vec2 vTexCoord;
 void main() {
     vec2 pos = (aPos * uScale + uOffset) / uScreenSize * 2.0 - 1.0;
     gl_Position = vec4(pos, 0.0, 1.0);
-    vTexCoord = uTexRect.xy + aTexCoord * uTexRect.zw;
+    // Flip only vertical (OpenGL texture origin is bottom-left, font image origin is top-left)
+    vTexCoord = uTexRect.xy + vec2(aTexCoord.x, 1.0 - aTexCoord.y) * uTexRect.zw;
 }
 """
 

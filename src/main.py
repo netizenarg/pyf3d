@@ -20,6 +20,7 @@ import ctypes
 
 from config import Config
 from gui import Menu
+from compass import Compass
 from camera import Camera
 from shader import Shader, VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC
 from chunks import ChunkManager
@@ -40,6 +41,7 @@ def main():
     star_count = config["star_count"]
     snow_count = config["snow_count"]
     snow_draw = config["snow_draw"]
+    draw_compass = config.get("draw_compass", False)
 
     if not glfw.init():
         sys.exit("Failed to initialize GLFW")
@@ -102,6 +104,10 @@ def main():
     glBindVertexArray(0)
 
     menu = Menu(WINDOW_WIDTH, WINDOW_HEIGHT, config, camera)
+
+    if draw_compass:
+        compass = Compass(WINDOW_WIDTH, WINDOW_HEIGHT, camera)
+
     keys = {}
 
     # Combined key callback
@@ -196,6 +202,9 @@ def main():
         glEnable(GL_DEPTH_TEST)
 
         menu.draw()
+
+        if draw_compass:
+            compass.draw()
 
         glfw.swap_buffers(window)
         glfw.poll_events()

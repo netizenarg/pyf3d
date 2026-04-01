@@ -16,7 +16,8 @@ class Config:
         "day_duration": 60.0,
         "star_count": 500,
         "snow_count": 500,
-        "snow_draw": False
+        "snow_draw": False,
+        "draw_compass": True
     }
 
     @classmethod

@@ -18,6 +18,7 @@ class Config:
         "snow_count": 500,
         "snow_draw": False,
         "draw_compass": True,
+        "compass_scale": 1.0,
         "draw_stats": True
     }
 

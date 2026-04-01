@@ -4,3 +4,6 @@ Python 3d FPS shooter
 ## run
 in your linux console start command
 ```./run.sh```
+
+## view
+![image](./pyf3d.gif "screen")

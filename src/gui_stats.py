@@ -107,6 +107,10 @@ class StatsPanel:
         glBindTexture(GL_TEXTURE_2D, 0)
         return tex_id
 
+    def resize(self, width, height):
+        self.width = width
+        self.height = height
+
     def update(self, position, speed, life_percent, mana_percent, weapon_name, ammo_count, familiar_name):
         self.position = position
         self.speed = speed

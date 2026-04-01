@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 
-WINDOW_WIDTH = 1280
-WINDOW_HEIGHT = 720
+class Screen:
+    width = 1280
+    height = 720
+    @property
+    def aspect(self):
+        return self.width / self.height
+screen = Screen()
+
+
 MOVEMENT_SPEED = 10.0
 PLAYER_HEIGHT = 1.5
 TERRAIN_SPACING = 1.0
@@ -28,6 +35,19 @@ from chunks import ChunkManager
 from target import Target
 from sky import Sky
 
+
+def compute_projection(width, height):
+    proj = numpy.zeros((4, 4), dtype=numpy.float32)
+    aspect = width / height
+    fov_rad = math.radians(75.0)
+    proj[0, 0] = 1.0 / (math.tan(fov_rad / 2.0) * aspect)
+    proj[1, 1] = 1.0 / math.tan(fov_rad / 2.0)
+    proj[2, 2] = -(FAR + NEAR) / (FAR - NEAR)
+    proj[2, 3] = -(2.0 * FAR * NEAR) / (FAR - NEAR)
+    proj[3, 2] = -1.0
+    return proj
+
+
 def main():
     # Load configuration
     config = Config.load()
@@ -42,8 +62,9 @@ def main():
     star_count = config["star_count"]
     snow_count = config["snow_count"]
     snow_draw = config["snow_draw"]
-    draw_compass = config.get("draw_compass", False)
     draw_stats = config.get("draw_stats", True)
+    draw_compass = config.get("draw_compass", False)
+    compass_scale = config.get("compass_scale", 1.0)
 
     if not glfw.init():
         sys.exit("Failed to initialize GLFW")
@@ -52,12 +73,13 @@ def main():
     glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
     glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
 
-    window = glfw.create_window(WINDOW_WIDTH, WINDOW_HEIGHT, "FPS Shooter - Infinite Terrain", None, None)
+    window = glfw.create_window(screen.width, screen.height, "FPS Shooter - Infinite Terrain", None, None)
     if not window:
         glfw.terminate()
         sys.exit("Failed to create window")
 
     glfw.make_context_current(window)
+    glViewport(0, 0, screen.width, screen.height)
     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
     glEnable(GL_DEPTH_TEST)
 
@@ -85,9 +107,8 @@ def main():
         targets.append(Target(camera.get_target_position(x, z)))
 
     proj = numpy.zeros((4, 4), dtype=numpy.float32)
-    aspect = WINDOW_WIDTH / WINDOW_HEIGHT
     fov = math.radians(75.0)
-    proj[0, 0] = 1.0 / (math.tan(fov / 2.0) * aspect)
+    proj[0, 0] = 1.0 / (math.tan(fov / 2.0) * screen.aspect)
     proj[1, 1] = 1.0 / math.tan(fov / 2.0)
     proj[2, 2] = -(FAR + NEAR) / (FAR - NEAR)
     proj[2, 3] = -(2.0 * FAR * NEAR) / (FAR - NEAR)
@@ -103,9 +124,24 @@ def main():
     glEnableVertexAttribArray(0)
     glBindVertexArray(0)
 
-    compass = Compass(WINDOW_WIDTH, WINDOW_HEIGHT, camera, draw_compass)
-    stats_panel = StatsPanel(WINDOW_WIDTH, WINDOW_HEIGHT, draw_stats)
-    menu = Menu(WINDOW_WIDTH, WINDOW_HEIGHT, config, camera)
+    compass = Compass(screen.width, screen.height, camera, draw_compass, compass_scale)
+    stats_panel = StatsPanel(screen.width, screen.height, draw_stats)
+    menu = Menu(screen.width, screen.height, config, camera)
+
+    # Projection matrix – initially computed
+    proj = compute_projection(screen.width, screen.height)
+
+    def resize_callback(window, width, height):
+        nonlocal proj
+        screen.width = width
+        screen.height = height
+        glViewport(0, 0, width, height)
+        stats_panel.resize(width, height)
+        compass.resize(width, height)
+        menu.resize(width, height)
+        proj = compute_projection(width, height)
+
+    glfw.set_window_size_callback(window, resize_callback)
 
     keys = {}
 
@@ -148,8 +184,8 @@ def main():
     glfw.set_key_callback(window, key_callback)
     glfw.set_mouse_button_callback(window, mouse_button_callback)
 
-    last_x = WINDOW_WIDTH // 2
-    last_y = WINDOW_HEIGHT // 2
+    last_x = screen.width // 2
+    last_y = screen.height // 2
     first_mouse = True
 
     def mouse_callback(window, xpos, ypos):
@@ -209,7 +245,7 @@ def main():
         shader_3d.set_vec3("uLightDir", light_dir)
         shader_3d.set_float("uLightIntensity", light_intensity)
 
-        sky.draw_background(view, proj, camera.position, glfw.get_time(), WINDOW_WIDTH, WINDOW_HEIGHT)
+        sky.draw_background(view, proj, camera.position, glfw.get_time(), screen.width, screen.height)
 
         shader_3d.use()
         chunk_manager.draw(shader_3d)
@@ -221,7 +257,7 @@ def main():
 
         glDisable(GL_DEPTH_TEST)
         shader_crosshair.use()
-        shader_crosshair.set_vec2("uScreenSize", numpy.array([WINDOW_WIDTH, WINDOW_HEIGHT]))
+        shader_crosshair.set_vec2("uScreenSize", numpy.array([screen.width, screen.height]))
         glBindVertexArray(crosshair_vao)
         glDrawArrays(GL_LINES, 0, 4)
         glBindVertexArray(0)

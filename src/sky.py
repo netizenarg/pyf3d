@@ -4,163 +4,10 @@ import numpy
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 import ctypes
+
 from camera import get_height
+from sky_shaders import *
 
-# ------------------------------ Sky Shader (gradient background) ------------------------------
-SKY_VERTEX_SHADER = """
-#version 330 core
-layout(location = 0) in vec2 aPos;
-out vec2 vTexCoord;
-void main() {
-    gl_Position = vec4(aPos, 0.0, 1.0);
-    vTexCoord = aPos * 0.5 + 0.5;
-}
-"""
-
-SKY_FRAGMENT_SHADER = """
-#version 330 core
-in vec2 vTexCoord;
-uniform float uDayFactor;
-uniform vec2 uScreenSize;
-out vec4 FragColor;
-
-vec3 nightZenith = vec3(0.05, 0.05, 0.15);
-vec3 nightHorizon = vec3(0.1, 0.1, 0.2);
-vec3 dayZenith = vec3(0.2, 0.5, 0.9);
-vec3 dayHorizon = vec3(1.0, 0.8, 0.5);
-
-void main() {
-    float t = vTexCoord.y;
-    vec3 zenith = mix(nightZenith, dayZenith, uDayFactor);
-    vec3 horizon = mix(nightHorizon, dayHorizon, uDayFactor);
-    vec3 color = mix(horizon, zenith, t);
-    FragColor = vec4(color, 1.0);
-}
-"""
-
-# ------------------------------ Celestial Shader (3D Sphere) ------------------------------
-CELESTIAL_VERTEX_SHADER = """
-#version 330 core
-layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec3 aNormal;
-uniform mat4 uModel;
-uniform mat4 uView;
-uniform mat4 uProjection;
-uniform vec3 uColor;
-out vec3 vColor;
-
-void main() {
-    gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
-    vec3 lightDir = normalize(vec3(1.0, 2.0, 1.0));
-    vec3 normal = normalize(aNormal);
-    float diff = max(dot(normal, lightDir), 0.2);
-    vColor = uColor * diff;
-}
-"""
-
-CELESTIAL_FRAGMENT_SHADER = """
-#version 330 core
-in vec3 vColor;
-out vec4 FragColor;
-
-void main() {
-    FragColor = vec4(vColor, 1.0);
-}
-"""
-
-# ------------------------------ Cloud Sphere Shader (with alpha) ------------------------------
-CLOUD_SPHERE_VERTEX_SHADER = """
-#version 330 core
-layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec3 aNormal;
-uniform mat4 uModel;
-uniform mat4 uView;
-uniform mat4 uProjection;
-out float vAlpha;
-
-void main() {
-    gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
-    vAlpha = 0.7;
-}
-"""
-
-CLOUD_SPHERE_FRAGMENT_SHADER = """
-#version 330 core
-in float vAlpha;
-out vec4 FragColor;
-
-void main() {
-    FragColor = vec4(0.95, 0.95, 0.95, vAlpha);
-}
-"""
-
-# ------------------------------ Star Shader (static twinkling points) ------------------------------
-STAR_VERTEX_SHADER = """
-#version 330 core
-layout(location = 0) in vec3 aPos;
-uniform mat4 uView;
-uniform mat4 uProjection;
-uniform float uTime;
-
-out float vBrightness;
-
-void main() {
-    vec4 worldPos = vec4(aPos, 1.0);
-    gl_Position = uProjection * uView * worldPos;
-    // Use position as seed for twinkling
-    float seed = sin(aPos.x * 10.0 + aPos.y * 8.0 + aPos.z * 12.0);
-    float twinkle = 0.5 + 0.5 * sin(uTime * 2.0 + seed * 100.0);
-    vBrightness = 0.6 + 0.4 * twinkle;
-    gl_PointSize = 2.0 + twinkle * 1.5;
-}
-"""
-
-STAR_FRAGMENT_SHADER = """
-#version 330 core
-in float vBrightness;
-out vec4 FragColor;
-
-void main() {
-    vec2 coord = gl_PointCoord;
-    float dist = length(coord - vec2(0.5));
-    if (dist > 0.5) discard;
-    float alpha = (1.0 - dist * 2.0) * 0.8;
-    FragColor = vec4(1.0, 1.0, 1.0, alpha * vBrightness);
-}
-"""
-
-# ------------------------------ Snow Shader (moving points) ------------------------------
-SNOW_VERTEX_SHADER = """
-#version 330 core
-layout(location = 0) in vec3 aPos;
-uniform mat4 uView;
-uniform mat4 uProjection;
-uniform float uTime;
-
-out float vBrightness;
-
-void main() {
-    vec4 worldPos = vec4(aPos, 1.0);
-    gl_Position = uProjection * uView * worldPos;
-    float twinkle = 0.5 + 0.5 * sin(uTime * 2.0 + aPos.x * 10.0 + aPos.y * 8.0 + aPos.z * 12.0);
-    vBrightness = 0.6 + 0.4 * twinkle;
-    gl_PointSize = 8.0 + twinkle * 3.0;
-}
-"""
-
-SNOW_FRAGMENT_SHADER = """
-#version 330 core
-in float vBrightness;
-out vec4 FragColor;
-
-void main() {
-    vec2 coord = gl_PointCoord;
-    float dist = length(coord - vec2(0.5));
-    if (dist > 0.5) discard;
-    float alpha = (1.0 - dist * 2.0) * 0.8;
-    FragColor = vec4(1.0, 1.0, 1.0, alpha * vBrightness);
-}
-"""
 
 class CloudBlob:
     def __init__(self, offset, size):
@@ -193,15 +40,17 @@ class Cloud:
         self.position += self.direction * self.speed * dt
 
 class Sky:
-    def __init__(self, chunk_manager, cloud_count_per_chunk=5, snow_count=500, star_count=500):
+    def __init__(self, chunk_manager, cloud_count_per_chunk=5, star_count=500, snow_count=500, snow_draw=False, distance = 200.0):
         self.chunk_manager = chunk_manager
         self.cloud_count_per_chunk = cloud_count_per_chunk
         self.clouds = {}
-        self.snow_count = snow_count
         self.star_count = star_count
         self.time_of_day = 0.0
         self.day_duration = 60.0
-        self.draw_testing_planet_circle = False   # disable test circle
+        self.snow_draw = snow_draw
+        self.snow_count = snow_count
+        self.distance = distance
+        self.is_day_cached = True
 
         # Generate static star positions on a sphere
         self.star_positions = []
@@ -216,9 +65,15 @@ class Sky:
 
         self.init_shaders()
         self._setup_sky_vao()
-        self._setup_sphere_vao()      # for sun, moon, clouds
+        self._setup_sphere_vao() # for sun, moon, clouds
         self._setup_star_vao()
         self._setup_snow_vao()
+
+    @property
+    def is_day(self):
+        day_factor = max(0.0, min(1.0, 1.0 - 2.0 * abs(0.5 - self.time_of_day)))
+        self.is_day_cached = day_factor > 0.5
+        return self.is_day_cached
 
     def init_shaders(self):
         self.sky_shader = compileProgram(
@@ -285,6 +140,35 @@ class Sky:
         glBindVertexArray(self._sky_vao)
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, None)
         glBindVertexArray(0)
+
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+
+        if not self.is_day:
+            self.draw_stars(view, proj, current_time)
+
+        # Sun angle: 0 at dawn (0.25), π/2 at noon (0.5), π at dusk (0.75)
+        sun_angle = (self.time_of_day - 0.25) * 2 * math.pi
+        # Direction from camera to sun
+        sun_dir = numpy.array([math.cos(sun_angle), math.sin(sun_angle), 0.0], dtype=numpy.float32)
+        sun_dir /= numpy.linalg.norm(sun_dir)
+        sun_world_pos = camera_pos + sun_dir * self.distance
+
+        if sun_dir[1] > 0:  # above horizon
+            self.draw_celestial_sphere(view, proj, sun_world_pos,
+                                    numpy.array([1.0, 0.6, 0.4], dtype=numpy.float32), 20.0)
+
+        # Moon angle = sun_angle + π
+        moon_angle = sun_angle + math.pi
+        moon_dir = numpy.array([math.cos(moon_angle), math.sin(moon_angle), 0.0], dtype=numpy.float32)
+        moon_dir /= numpy.linalg.norm(moon_dir)
+        moon_world_pos = camera_pos + moon_dir * self.distance
+
+        if moon_dir[1] > 0:
+            self.draw_celestial_sphere(view, proj, moon_world_pos,
+                                    numpy.array([0.5, 0.5, 0.5], dtype=numpy.float32), 15.0)
+
+        glDisable(GL_BLEND)
         glEnable(GL_DEPTH_TEST)
 
     def draw_celestial_sphere(self, view, proj, world_pos, color, size):
@@ -367,56 +251,13 @@ class Sky:
         glBindVertexArray(0)
         glDisable(GL_PROGRAM_POINT_SIZE)
 
-    def draw_all(self, view, proj, camera_pos, current_time):
-        day_factor = max(0.0, min(1.0, 1.0 - 2.0 * abs(0.5 - self.time_of_day)))
-        is_day = day_factor > 0.5
-
-        # Draw Sun / Moon (3D spheres)
-        glDisable(GL_DEPTH_TEST)
-        glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE)
-
-        distance = 200.0
-        sun_angle = (self.time_of_day - 0.25) * 2 * math.pi
-        sun_x = distance * math.cos(sun_angle)
-        sun_y = distance * math.sin(sun_angle)
-        sun_z = 0.0
-        sun_world_pos = numpy.array([sun_x, sun_y, sun_z], dtype=numpy.float32)
-
-        if sun_y > 0:
-            self.draw_celestial_sphere(view, proj, sun_world_pos,
-                                       numpy.array([1.0, 0.6, 0.4], dtype=numpy.float32), 20.0)
-
-        moon_angle = sun_angle + math.pi
-        moon_x = distance * math.cos(moon_angle)
-        moon_y = distance * math.sin(moon_angle)
-        moon_z = 0.0
-        moon_world_pos = numpy.array([moon_x, moon_y, moon_z], dtype=numpy.float32)
-
-        if moon_y > 0:
-            self.draw_celestial_sphere(view, proj, moon_world_pos,
-                                       numpy.array([0.5, 0.5, 0.5], dtype=numpy.float32), 15.0)
-
-        glDisable(GL_BLEND)
-        glEnable(GL_DEPTH_TEST)
-
-        # Stars – only at night
-        if not is_day:
-            glDisable(GL_DEPTH_TEST)
-            glEnable(GL_BLEND)
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE)
-            self.draw_stars(view, proj, current_time)
-            glDisable(GL_BLEND)
-            glEnable(GL_DEPTH_TEST)
-
+    def draw_foreground(self, view, proj, camera_pos, current_time):
         # Clouds – drawn with alpha blending
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
         self.draw_clouds(view, proj, camera_pos)
         glDisable(GL_BLEND)
-
-        # Snow – only at night, depth test disabled
-        if not is_day:
+        if self.snow_draw:
             glDisable(GL_DEPTH_TEST)
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE)

@@ -10,5 +10,7 @@
     "star_count": 500,
     "snow_count": 500,
     "snow_draw": false,
-    "draw_compass": true
+    "draw_compass": true,
+    "compass_scale": 1.0,
+    "draw_stats": true
 }

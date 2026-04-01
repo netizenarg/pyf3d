@@ -9,13 +9,15 @@ from gui_shaders import TEXT_VERTEX_SHADER, TEXT_FRAGMENT_SHADER
 
 
 class Compass:
-    def __init__(self, screen_width, screen_height, camera):
+    def __init__(self, screen_width, screen_height, camera, enabled=True, scale=1.0):
+        self.enabled = enabled
         self.width = screen_width
         self.height = screen_height
         self.camera = camera
         self.radius = 80
         self.margin = 20
-        self.enabled = True
+        self.scale = scale
+        self.text_size = int(16 * scale)
 
         # Circle texture
         self.circle_tex = self._create_circle_texture()
@@ -191,33 +193,32 @@ class Compass:
         glBindVertexArray(0)
         return vao
 
+    def resize(self, width, height):
+        self.width = width
+        self.height = height
+        self.radius = min(width, height) * 0.1 * self.scale
+        self.margin = self.radius * 0.2
+        self.text_size = int(self.radius * 0.25)
+
     # ----------------------------------------------------------------------
     # Public draw method
     # ----------------------------------------------------------------------
     def draw(self):
-        if not self.enabled:
-            return
-
-        glDisable(GL_DEPTH_TEST)
-        glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-
-        cx = self.width - self.margin - self.radius
-        cy = self.margin + self.radius
-
-        self._draw_circle(cx, cy, self.radius)
-
-        self._draw_text("N", cx - 8, cy - self.radius + 10, 16, (0.7, 0.0, 1.0))
-        self._draw_text("S", cx - 8, cy + self.radius - 20, 16, (0.7, 0.0, 1.0))
-        self._draw_text("W", cx - self.radius + 10, cy, 16, (0.7, 0.0, 1.0))
-        self._draw_text("E", cx + self.radius - 20, cy, 16, (0.7, 0.0, 1.0))
-
-        # Red arrow (camera yaw) – reaches inner edge, semi‑transparent
-        angle_rad = math.radians(self.camera.yaw)
-        self._draw_arrow(cx, cy, self.radius, angle_rad)
-
-        glEnable(GL_DEPTH_TEST)
-        glDisable(GL_BLEND)
+        if self.enabled:
+            glDisable(GL_DEPTH_TEST)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            cx = self.width - self.margin - self.radius
+            cy = self.margin + self.radius
+            self._draw_circle(cx, cy, self.radius)
+            self._draw_text("N", cx - self.text_size//2, cy - self.radius + self.text_size, self.text_size, (0.7, 0.0, 1.0))
+            self._draw_text("S", cx - self.text_size//2, cy + self.radius - self.text_size, self.text_size, (0.7, 0.0, 1.0))
+            self._draw_text("W", cx - self.radius + self.text_size//2, cy, self.text_size, (0.7, 0.0, 1.0))
+            self._draw_text("E", cx + self.radius - self.text_size*1.5, cy, self.text_size, (0.7, 0.0, 1.0))
+            angle_rad = math.radians(self.camera.yaw)
+            self._draw_arrow(cx, cy, self.radius, angle_rad)
+            glEnable(GL_DEPTH_TEST)
+            glDisable(GL_BLEND)
 
     # ----------------------------------------------------------------------
     # Draw circle at given top‑origin centre

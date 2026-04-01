@@ -115,6 +115,10 @@ class Menu:
         self.text_uTexRect = glGetUniformLocation(self.text_shader, "uTexRect")
         self.text_uFontTexture = glGetUniformLocation(self.text_shader, "uFontTexture")
 
+    def resize(self, width, height):
+        self.width = width
+        self.height = height
+
     def init_ui(self):
         # Add close button
         self.buttons.append(((self.close_button[0], self.close_button[1],

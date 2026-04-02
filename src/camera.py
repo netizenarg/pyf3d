@@ -10,10 +10,11 @@ def get_height(x, z):
             0.2 * math.sin((x * 0.6 + z * 0.4) * 0.8)) * 2.0 + 0.5
 
 class Camera:
-    def __init__(self, position=None, yaw=0, mouse_sensitivity=0.002, movement_speed=10.0, player_height=1.5, rotate_only_horizontal=True):
-        if position is None:
-            position = numpy.array([0.0, player_height, 0.0])
-        self.position = position
+    def __init__(self, player=None, yaw=0, mouse_sensitivity=0.002, movement_speed=10.0, rotate_only_horizontal=True):
+        self.position = numpy.array([player.position[0], player.position[1], player.position[2]])
+        self.player_height = player.height
+        #if self.position is None:
+            #self.position = numpy.array([0.0, player.height, 0.0])
         self.yaw = yaw
         self.pitch = 0.0
         self.pitch_staticaly = rotate_only_horizontal
@@ -22,8 +23,8 @@ class Camera:
         self.right = numpy.array([1.0, 0.0, 0.0])
         self.mouse_sensitivity = mouse_sensitivity
         self.movement_speed = movement_speed
-        self.player_height = player_height
         self.update_vectors()
+        self.adjust_height()
 
     def update_vectors(self):
         front = numpy.array([
@@ -36,6 +37,11 @@ class Camera:
         self.right /= numpy.linalg.norm(self.right)
         self.up = numpy.cross(self.right, self.front)
         self.up /= numpy.linalg.norm(self.up)
+
+    def adjust_height(self):
+        """Set the camera's Y position to ground + player height."""
+        ground_y = get_height(self.position[0], self.position[2])
+        self.position[1] = ground_y + self.player_height
 
     def process_mouse(self, dx, dy):
         self.yaw += dx * self.mouse_sensitivity
@@ -64,11 +70,6 @@ class Camera:
 
         # Adjust Y to terrain height
         self.adjust_height()
-
-    def adjust_height(self):
-        """Set the camera's Y position to ground + player height."""
-        ground_y = get_height(self.position[0], self.position[2])
-        self.position[1] = ground_y + self.player_height
 
     def get_view_matrix(self):
         f = self.front

@@ -129,6 +129,8 @@ class Chunk:
     def __init__(self, cx, cz, vertices, indices):
         self.cx = cx
         self.cz = cz
+        self.vertices = vertices
+        self.indices = indices
         self.vao = None
         self.vbo = None
         self.ebo = None
@@ -174,25 +176,50 @@ class Chunk:
 
 
 class ChunkManager:
-    def __init__(self, chunk_size=32, load_radius=3, spacing=1.0, use_multiprocessing=True):
+    def __init__(self, chunk_size=32, load_radius=3, spacing=1.0, use_multiprocessing=True, player=None):
         self.chunk_size = chunk_size
         self.load_radius = load_radius
         self.spacing = spacing
-        self.chunks = {}               # (cx, cz) -> Chunk
-        self.pending_requests = set()  # chunks that have been requested but not yet built
+        self.serializer = player.serializer if player else None
+        self.chunks = {}
+        self.pending_requests = set()
         if use_multiprocessing:
             self.generator = ChunkGenerator(chunk_size, spacing)
         else:
-            self.generator = None  # fallback to sync generation if needed
-        self.chunks[(0,0)] = self._generate_sync(0,0)
+            self.generator = None
+        # Pre-load chunks around the player's starting position
+        if player:
+            phys_size = (chunk_size - 1) * spacing
+            player_cx = int(player.position[0] // phys_size)
+            player_cz = int(player.position[2] // phys_size)
+            self.load_chunks_around(player_cx, player_cz)
 
     def _generate_sync(self, cx, cz):
-        """Fallback synchronous generation (no multiprocessing)."""
         data = generate_chunk_data(cx, cz, self.chunk_size, self.spacing)
         return Chunk(*data)
 
+    def load_chunks_around(self, center_cx, center_cz):
+        """Load chunks from database within load_radius of the given chunk coordinates."""
+        if not self.serializer:
+            return
+        for dx in range(-self.load_radius, self.load_radius + 1):
+            for dz in range(-self.load_radius, self.load_radius + 1):
+                cx, cz = center_cx + dx, center_cz + dz
+                key = (cx, cz)
+                if key not in self.chunks:
+                    vertices, indices = self.serializer.load_chunk(cx, cz)
+                    if vertices is not None:
+                        self.chunks[key] = Chunk(cx, cz, vertices, indices)
+
+    def save_all_chunks(self):
+        """Save all currently loaded chunks to the database."""
+        if not self.serializer:
+            return
+        for (cx, cz), chunk in self.chunks.items():
+            self.serializer.save_chunk(cx, cz, chunk.vertices, chunk.indices)
+
+    # In update(), modify the part that generates a chunk: try loading first
     def update(self, camera_pos):
-        # Physical size of one chunk in world units
         phys_size = (self.chunk_size - 1) * self.spacing
         cx = int(camera_pos[0] // phys_size)
         cz = int(camera_pos[2] // phys_size)
@@ -210,18 +237,24 @@ class ChunkManager:
         # Remove pending requests that are no longer needed
         self.pending_requests = {req for req in self.pending_requests if req in needed}
 
-        # Request missing chunks
+        # Load missing chunks: first try DB, then request generation
         for key in needed:
             if key not in self.chunks and key not in self.pending_requests:
+                # Try to load from database
+                if self.serializer:
+                    vertices, indices = self.serializer.load_chunk(*key)
+                    if vertices is not None:
+                        self.chunks[key] = Chunk(*key, vertices, indices)
+                        continue
+                # If not found, request generation
                 self.pending_requests.add(key)
                 if self.generator:
                     self.generator.request_chunk(*key)
                 else:
-                    # Synchronous fallback (may cause stutter)
                     self.chunks[key] = self._generate_sync(*key)
                     self.pending_requests.discard(key)
 
-        # Process completed chunks from generator
+        # Process completed chunks from generator (same as before)
         if self.generator:
             for data in self.generator.get_completed():
                 cx, cz, vertices, indices = data
@@ -230,7 +263,6 @@ class ChunkManager:
                     self.pending_requests.discard(key)
                     self.chunks[key] = Chunk(cx, cz, vertices, indices)
                 else:
-                    # Discard data for chunk that is no longer needed
                     self.pending_requests.discard(key)
 
     def draw(self, shader):

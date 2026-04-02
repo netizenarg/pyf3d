@@ -22,7 +22,9 @@ class Config:
         "draw_stats": True,
         "db_path": "data.db",
         "spawn_mode": "saved",   # "saved", "random", "portal"
-        "random_spawn_range": 500  # half-extent for random spawn
+        "random_spawn_range": 500,
+        "camera_mode": 0,
+        "rotate_only_horizontal": True
     }
 
     @classmethod
@@ -37,8 +39,12 @@ class Config:
                 return merged
             except Exception as e:
                 print(f"Error loading config: {e}")
+                # fallback: create default file
+                cls.save(cls.defaults)
                 return cls.defaults.copy()
         else:
+            # Config file missing – create it with defaults
+            cls.save(cls.defaults)
             return cls.defaults.copy()
 
     @classmethod

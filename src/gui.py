@@ -173,7 +173,7 @@ class Menu:
         elif key == "movement_speed":
             self.camera.movement_speed = new_val
         elif key == "player_height":
-            self.camera.player_height = new_val
+            self.camera.player.height = new_val
             self.camera.adjust_height()
         print(f"Clicked {key} +/- : new value = {new_val}")
 

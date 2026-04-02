@@ -1,3 +1,6 @@
+# any JSON configuration
+*.json
+
 # SQLite or another data files
 *.db
 

@@ -2,8 +2,9 @@ import numpy
 from serializer import Serializer
 
 class Player:
-    def __init__(self, db_path, height=1.5):
+    def __init__(self, db_path, height=0.5):
         self.serializer = Serializer(db_path)
+        self.height = height
         self.position = (0.0, 0.0, 0.0)
         self.speed = 0.0
         self.life_percent = 100.0
@@ -12,7 +13,6 @@ class Player:
         self.ammo_count = 100
         self.familiar_name = ""
         self.portal_position = (0.0, 0.0, 0.0)
-        self.height = height
         self.load()
 
     def save(self):
@@ -49,6 +49,3 @@ class Player:
     def update_portal_position(self, pos):
         self.portal_position = pos
         self.save()  # optionally save immediately
-
-    def update_from_camera(self, camera):
-        self.position = (camera.position[0], camera.position[1], camera.position[2])

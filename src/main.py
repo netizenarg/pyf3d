@@ -25,6 +25,7 @@ import random
 import sys
 import ctypes
 
+from camera import get_height
 from config import Config
 from gui import Menu
 from gui_stats import StatsPanel
@@ -34,6 +35,7 @@ from shader import Shader, VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHAIR_VER
 from chunks import ChunkManager
 from target import Target
 from sky import Sky
+from player import Player
 
 
 def compute_projection(width, height):
@@ -51,6 +53,7 @@ def compute_projection(width, height):
 def main():
     # Load configuration
     config = Config.load()
+    db_path = config.get("db_path", "data.db")
     mouse_sensitivity = config["mouse_sensitivity"]
     movement_speed = config["movement_speed"]
     player_height = config["player_height"]
@@ -65,6 +68,35 @@ def main():
     draw_stats = config.get("draw_stats", True)
     draw_compass = config.get("draw_compass", False)
     compass_scale = config.get("compass_scale", 1.0)
+    spawn_mode = config.get("spawn_mode", "saved")
+    random_range = config.get("random_spawn_range", 500)
+
+    player = Player(db_path, height=player_height)
+
+    if spawn_mode == "random":
+        # Generate random position within range
+        rand_x = random.uniform(-random_range, random_range)
+        rand_z = random.uniform(-random_range, random_range)
+        rand_y = get_height(rand_x, rand_z) + player_height
+        player.position = (rand_x, rand_y, rand_z)
+        # Also update camera position later
+    elif spawn_mode == "portal":
+        # Use saved portal position if exists, otherwise fallback to saved or origin
+        if player.portal_position != (0.0, 0.0, 0.0):
+            player.position = player.portal_position
+        else:
+            # Fallback to saved position (or generate random if none)
+            if player.position == (0.0, 0.0, 0.0):
+                rand_x = random.uniform(-random_range, random_range)
+                rand_z = random.uniform(-random_range, random_range)
+                rand_y = get_height(rand_x, rand_z) + player_height
+                player.position = (rand_x, rand_y, rand_z)
+    elif spawn_mode == "saved":
+        # Already loaded, do nothing
+        pass
+    else:
+        # Unknown mode, use saved
+        pass
 
     if not glfw.init():
         sys.exit("Failed to initialize GLFW")
@@ -83,13 +115,17 @@ def main():
     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
     glEnable(GL_DEPTH_TEST)
 
-    camera = Camera(mouse_sensitivity=mouse_sensitivity,
-                    movement_speed=movement_speed,
-                    player_height=player_height)
+    camera = Camera(player=player,
+                    mouse_sensitivity=mouse_sensitivity,
+                    movement_speed=movement_speed)
 
-    chunk_manager = ChunkManager(chunk_size=chunk_size,
-                                 load_radius=load_radius,
-                                 spacing=terrain_spacing)
+    chunk_manager = ChunkManager(
+        chunk_size=chunk_size,
+        load_radius=load_radius,
+        spacing=terrain_spacing,
+        player=player
+    )
+
     sky = Sky(chunk_manager,
               cloud_count_per_chunk=cloud_count_per_chunk,
               star_count=star_count,
@@ -219,20 +255,24 @@ def main():
         # Keep track of previous position
         if 'prev_pos' not in locals():
             prev_pos = camera.position.copy()
+
         # Compute speed
         speed = numpy.linalg.norm(camera.position - prev_pos) / dt if dt > 0 else 0.0
         prev_pos = camera.position.copy()
 
-        # Update stats_panel values
+        player.speed = speed
+        player.update_from_camera(camera)
+
+        # Update stats panel with player's values
         if stats_panel.enabled:
             stats_panel.update(
-                position=camera.position,
-                speed=speed,
-                life_percent=100.0,
-                mana_percent=100.0,
-                weapon_name="Rifle",
-                ammo_count=100,
-                familiar_name=""
+                position=player.position,
+                speed=player.speed,
+                life_percent=player.life_percent,
+                mana_percent=player.mana_percent,
+                weapon_name=player.weapon_name,
+                ammo_count=player.ammo_count,
+                familiar_name=player.familiar_name
             )
 
         glClearColor(0.1, 0.2, 0.3, 1.0)
@@ -271,6 +311,10 @@ def main():
         glfw.poll_events()
 
     chunk_manager.shutdown()
+
+    chunk_manager.save_all_chunks()
+    player.save()
+
     glfw.terminate()
 
 if __name__ == "__main__":

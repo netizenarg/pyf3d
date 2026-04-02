@@ -19,7 +19,10 @@ class Config:
         "snow_draw": False,
         "draw_compass": True,
         "compass_scale": 1.0,
-        "draw_stats": True
+        "draw_stats": True,
+        "db_path": "data.db",
+        "spawn_mode": "saved",   # "saved", "random", "portal"
+        "random_spawn_range": 500  # half-extent for random spawn
     }
 
     @classmethod

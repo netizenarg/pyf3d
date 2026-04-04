@@ -2,8 +2,10 @@ import numpy
 import ctypes
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
-from gui_shaders import *
+
+from shaders.gui_shdr import *
 from font import FONT_BITMAPS
+
 
 class StatsPanel:
     def __init__(self, screen_width, screen_height, enabled=True):
@@ -71,8 +73,8 @@ class StatsPanel:
         # Data
         self.position = (0, 0, 0)
         self.speed = 0.0
-        self.life_percent = 100.0
-        self.mana_percent = 100.0
+        self.life = 100
+        self.mana = 100
         self.weapon_name = "Rifle"
         self.ammo_count = 100
         self.familiar_name = ""
@@ -111,11 +113,11 @@ class StatsPanel:
         self.width = width
         self.height = height
 
-    def update(self, position, speed, life_percent, mana_percent, weapon_name, ammo_count, familiar_name):
+    def update(self, position, speed, life, mana, weapon_name, ammo_count, familiar_name):
         self.position = position
         self.speed = speed
-        self.life_percent = life_percent
-        self.mana_percent = mana_percent
+        self.life = life
+        self.mana = mana
         self.weapon_name = weapon_name
         self.ammo_count = ammo_count
         self.familiar_name = familiar_name
@@ -124,12 +126,12 @@ class StatsPanel:
         # Row 0: Pos, Speed, Life, Mana
         self.cells[0][0] = f"Pos: ({position[0]:.1f}, {position[1]:.1f}, {position[2]:.1f})"
         self.cells[0][1] = f"Speed: {speed:.1f}"
-        self.cells[0][2] = f"Life: {life_percent:.0f}%"
-        self.cells[0][3] = f"Mana: {mana_percent:.0f}%"
+        self.cells[0][2] = f"Life: {life:d}%"
+        self.cells[0][3] = f"Mana: {mana:d}%"
 
         # Row 1: Weapon (value only), Ammo, Familiar (value only), empty
         self.cells[1][0] = weapon_name          # no label for strings
-        self.cells[1][1] = f"Ammo: {ammo_count:.0f}"
+        self.cells[1][1] = f"Ammo: {ammo_count:d}"
         self.cells[1][2] = familiar_name
         self.cells[1][3] = ""
 

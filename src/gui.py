@@ -1,10 +1,12 @@
+import logging
 import numpy
 import ctypes
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 import glfw
 
-from gui_shaders import *
+import config
+from shaders.gui_shdr import *
 from font import FONT_BITMAPS
 
 # Ensure Q is exactly 8 rows
@@ -21,7 +23,7 @@ class Menu:
 
         # Layout – all y‑coordinates are top‑origin (0 = top)
         self.panel_x = 50
-        self.panel_y = 50                     # top edge of panel
+        self.panel_y = 50 # top edge of panel
         self.panel_w = 500
         self.panel_h = 250
         self.button_h = 30
@@ -175,13 +177,12 @@ class Menu:
         elif key == "player_height":
             self.camera.player.height = new_val
             self.camera.adjust_height()
-        print(f"Clicked {key} +/- : new value = {new_val}")
+        logging.error(f"Clicked {key} +/- : new value = {new_val}")
 
     def close(self):
-        import config
         config.Config.save(self.config)
         self.active = False
-        print("Menu closed, settings saved.")
+        logging.error("Menu closed, settings saved.")
 
     def handle_mouse(self, xpos, ypos, button):
         if not self.active or button != glfw.MOUSE_BUTTON_LEFT:

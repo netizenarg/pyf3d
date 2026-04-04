@@ -5,7 +5,7 @@ import math
 import ctypes
 
 from font import FONT_BITMAPS
-from gui_shaders import TEXT_VERTEX_SHADER, TEXT_FRAGMENT_SHADER
+from shaders.gui_shdr import TEXT_VERTEX_SHADER, TEXT_FRAGMENT_SHADER
 
 
 class Compass:

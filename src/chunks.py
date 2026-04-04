@@ -1,3 +1,4 @@
+import logging
 import numpy
 import ctypes
 import multiprocessing as mp
@@ -80,9 +81,8 @@ class ChunkWorker(mp.Process):
                 self.result_queue.put(data)
             except queue.Empty:
                 continue
-            except Exception as e:
-                # Log error and continue
-                print(f"Worker error: {e}")
+            except Exception as e: # Log error and continue
+                logging.error(f"Worker error: {e}")
 
 
 class ChunkGenerator:

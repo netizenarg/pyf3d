@@ -2,7 +2,7 @@ import numpy
 import ctypes
 from OpenGL.GL import *
 
-from shader import Shader
+from shaders.shader import Shader
 
 
 class PlayerModel:
@@ -60,6 +60,7 @@ class PlayerModel:
         self.vertex_data = vertices
         self.index_data = indices
         self.index_count = len(indices)
+        self.appended_models = []
 
     def _setup_buffers(self):
         glBindVertexArray(self.vao)
@@ -75,58 +76,6 @@ class PlayerModel:
 
         glBindVertexArray(0)
 
-    def draw(self, position, rotation_yaw, view, projection, light_dir, light_intensity):
-        glUseProgram(self.shader.program)
-        self.shader.set_mat4("uView", view)
-        self.shader.set_mat4("uProjection", projection)
-        self.shader.set_vec3("uLightDir", light_dir)
-        self.shader.set_float("uLightIntensity", light_intensity)
-
-        # Build model matrix: translate after rotate (rotate in place, then move)
-        c = numpy.cos(rotation_yaw)
-        s = numpy.sin(rotation_yaw)
-        rot_y = numpy.array([
-            [c, 0, s, 0],
-            [0, 1, 0, 0],
-            [-s, 0, c, 0],
-            [0, 0, 0, 1]
-        ], dtype=numpy.float32)
-
-        trans = numpy.eye(4, dtype=numpy.float32)
-        trans[0, 3] = position[0]
-        trans[1, 3] = position[1]
-        trans[2, 3] = position[2]
-
-        model = trans @ rot_y   # correct order: rotate, then translate
-        self.shader.set_mat4("uModel", model)
-
-        # Draw body parts (each part uses the same model matrix with local offsets)
-        center_y = 0.8
-        scale_body = numpy.array([0.6, 0.8, 0.4], dtype=numpy.float32)
-        self._draw_scaled_cube(scale_body, numpy.array([0.0, center_y, 0.0]), model)
-        scale_head = numpy.array([0.5, 0.5, 0.5], dtype=numpy.float32)
-        self._draw_scaled_cube(scale_head, numpy.array([0.0, center_y+0.8, 0.0]), model)
-        scale_arm = numpy.array([0.3, 0.6, 0.3], dtype=numpy.float32)
-        self._draw_scaled_cube(scale_arm, numpy.array([-0.5, center_y+0.4, 0.0]), model)
-        self._draw_scaled_cube(scale_arm, numpy.array([ 0.5, center_y+0.4, 0.0]), model)
-        scale_leg = numpy.array([0.3, 0.6, 0.3], dtype=numpy.float32)
-        self._draw_scaled_cube(scale_leg, numpy.array([-0.3, center_y-0.5, 0.0]), model)
-        self._draw_scaled_cube(scale_leg, numpy.array([ 0.3, center_y-0.5, 0.0]), model)
-
-        # ----- Face features -----
-        # Head center is at (0, center_y+0.8, 0) with scale 0.5
-        head_center_y = center_y + 0.8
-        # Eyes (small cubes, slightly protruding)
-        eye_scale = numpy.array([0.12, 0.12, 0.08], dtype=numpy.float32)
-        self._draw_scaled_cube(eye_scale, numpy.array([-0.2, head_center_y+0.1, 0.28]), model)
-        self._draw_scaled_cube(eye_scale, numpy.array([ 0.2, head_center_y+0.1, 0.28]), model)
-        # Nose (small cube, protruding more)
-        nose_scale = numpy.array([0.1, 0.1, 0.1], dtype=numpy.float32)
-        self._draw_scaled_cube(nose_scale, numpy.array([0.0, head_center_y-0.05, 0.32]), model)
-        # Mouth (horizontal elongated cube)
-        mouth_scale = numpy.array([0.2, 0.06, 0.06], dtype=numpy.float32)
-        self._draw_scaled_cube(mouth_scale, numpy.array([0.0, head_center_y-0.15, 0.29]), model)
-
     def _draw_scaled_cube(self, scale, offset, parent_model):
         local_model = numpy.eye(4, dtype=numpy.float32)
         local_model[0, 0] = scale[0]
@@ -140,3 +89,52 @@ class PlayerModel:
         glBindVertexArray(self.vao)
         glDrawElements(GL_TRIANGLES, self.index_count, GL_UNSIGNED_INT, None)
         glBindVertexArray(0)
+
+    def add_model(self, model):
+        self.appended_models.append(model)
+
+    def get_model_matrix(self, position, rotation_yaw):
+        c = numpy.cos(rotation_yaw)
+        s = numpy.sin(rotation_yaw)
+        rot_y = numpy.array([
+            [c, 0, s, 0],
+            [0, 1, 0, 0],
+            [-s, 0, c, 0],
+            [0, 0, 0, 1]
+        ], dtype=numpy.float32)
+        trans = numpy.eye(4, dtype=numpy.float32)
+        trans[0, 3] = position[0]
+        trans[1, 3] = position[1]
+        trans[2, 3] = position[2]
+        return trans @ rot_y
+
+    def draw(self, position, rotation_yaw, view, projection, light_dir, light_intensity):
+        model_matrix = self.get_model_matrix(position, rotation_yaw)
+        glUseProgram(self.shader.program)
+        self.shader.set_mat4("uView", view)
+        self.shader.set_mat4("uProjection", projection)
+        self.shader.set_vec3("uLightDir", light_dir)
+        self.shader.set_float("uLightIntensity", light_intensity)
+        self.shader.set_mat4("uModel", model_matrix)
+        # Draw body parts (same as before, but using parent matrix)
+        center_y = 0.8
+        scale_body = numpy.array([0.6, 0.8, 0.4], dtype=numpy.float32)
+        self._draw_scaled_cube(scale_body, numpy.array([0.0, center_y, 0.0]), model_matrix)
+        scale_head = numpy.array([0.5, 0.5, 0.5], dtype=numpy.float32)
+        self._draw_scaled_cube(scale_head, numpy.array([0.0, center_y+0.8, 0.0]), model_matrix)
+        scale_arm = numpy.array([0.3, 0.6, 0.3], dtype=numpy.float32)
+        self._draw_scaled_cube(scale_arm, numpy.array([-0.5, center_y+0.4, 0.0]), model_matrix)
+        self._draw_scaled_cube(scale_arm, numpy.array([ 0.5, center_y+0.4, 0.0]), model_matrix)
+        scale_leg = numpy.array([0.3, 0.6, 0.3], dtype=numpy.float32)
+        self._draw_scaled_cube(scale_leg, numpy.array([-0.3, center_y-0.5, 0.0]), model_matrix)
+        self._draw_scaled_cube(scale_leg, numpy.array([ 0.3, center_y-0.5, 0.0]), model_matrix)
+        head_center_y = center_y + 0.8
+        eye_scale = numpy.array([0.12, 0.12, 0.08], dtype=numpy.float32)
+        self._draw_scaled_cube(eye_scale, numpy.array([-0.2, head_center_y+0.1, 0.28]), model_matrix)
+        self._draw_scaled_cube(eye_scale, numpy.array([ 0.2, head_center_y+0.1, 0.28]), model_matrix)
+        nose_scale = numpy.array([0.1, 0.1, 0.1], dtype=numpy.float32)
+        self._draw_scaled_cube(nose_scale, numpy.array([0.0, head_center_y-0.05, 0.32]), model_matrix)
+        mouth_scale = numpy.array([0.2, 0.06, 0.06], dtype=numpy.float32)
+        self._draw_scaled_cube(mouth_scale, numpy.array([0.0, head_center_y-0.15, 0.29]), model_matrix)
+        for amodel in self.appended_models:
+            amodel.draw(view, projection, model_matrix, amodel.offset)

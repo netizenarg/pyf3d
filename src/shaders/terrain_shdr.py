@@ -1,32 +1,6 @@
-from OpenGL.GL import *
-from OpenGL.GL.shaders import compileProgram, compileShader
+# terrain_unified_shdr.py
+# Combines correct lighting (from terrain_shdr.py) with working fog (from terrain_fog_shdr.py)
 
-class Shader:
-    def __init__(self, vert_src, frag_src):
-        self.program = compileProgram(compileShader(vert_src, GL_VERTEX_SHADER),
-                                      compileShader(frag_src, GL_FRAGMENT_SHADER))
-
-    def use(self):
-        glUseProgram(self.program)
-
-    def set_mat4(self, name, mat):
-        loc = glGetUniformLocation(self.program, name)
-        glUniformMatrix4fv(loc, 1, GL_TRUE, mat)
-
-    def set_vec3(self, name, vec):
-        loc = glGetUniformLocation(self.program, name)
-        glUniform3fv(loc, 1, vec)
-
-    def set_vec2(self, name, vec):
-        loc = glGetUniformLocation(self.program, name)
-        glUniform2fv(loc, 1, vec)
-
-    def set_float(self, name, val):
-        loc = glGetUniformLocation(self.program, name)
-        glUniform1f(loc, val)
-
-
-# Shader sources remain unchanged
 VERTEX_SHADER_SRC = """
 #version 330 core
 layout(location = 0) in vec3 aPos;
@@ -37,8 +11,10 @@ uniform mat4 uView;
 uniform mat4 uProjection;
 uniform vec3 uLightDir;
 uniform float uLightIntensity;
+uniform vec3 uCameraPos;   // required for fog (passed but not used in vertex)
 
 out vec3 vColor;
+out vec3 vWorldPos;
 
 void main() {
     vec3 normal = normalize(aNormal);
@@ -51,17 +27,29 @@ void main() {
     float h = aPos.y;
     vColor = mix(vec3(0.3, 0.6, 0.2), vec3(0.5, 0.4, 0.2), clamp((h + 2.0) / 6.0, 0.0, 1.0));
     vColor *= diff;
-    gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+
+    vec4 worldPos4 = uModel * vec4(aPos, 1.0);
+    vWorldPos = worldPos4.xyz;
+    gl_Position = uProjection * uView * worldPos4;
 }
 """
 
 FRAGMENT_SHADER_SRC = """
 #version 330 core
 in vec3 vColor;
+in vec3 vWorldPos;
 out vec4 FragColor;
 
+uniform vec3 uCameraPos;
+uniform vec3 uFogColor;
+uniform float uFogStart;
+uniform float uFogEnd;
+
 void main() {
-    FragColor = vec4(vColor, 1.0);
+    float dist = distance(vWorldPos, uCameraPos);
+    float fogFactor = clamp((dist - uFogStart) / (uFogEnd - uFogStart), 0.0, 1.0);
+    vec3 finalColor = mix(vColor, uFogColor, fogFactor);
+    FragColor = vec4(finalColor, 1.0);
 }
 """
 

@@ -1,0 +1,428 @@
+import numpy
+import math
+import random
+import ctypes
+from OpenGL.GL import *
+from OpenGL.GL.shaders import compileProgram, compileShader
+
+from camera import get_height
+from shaders.shader import Shader
+from shaders.mob_shdr import MOB_VERTEX_SHADER_SRC, MOB_FRAGMENT_SHADER_SRC
+from shaders.ammo_shdr import PARTICLE_AMMO_EXPLOSION_VERTEX_SHADER_SRC, PARTICLE_AMMO_EXPLOSION_FRAGMENT_SHADER_SRC
+from shaders.gui_shdr import RECT_VERTEX_SHADER, RECT_FRAGMENT_SHADER
+
+
+def get_aimed_mob(camera, mob_manager, max_distance=50.0):
+    """Return the closest mob intersected by the camera's forward ray."""
+    origin = camera.position
+    direction = camera.front
+    best_mob = None
+    best_dist = max_distance + 1.0
+    for mobs in mob_manager.active_mobs.values():
+        for mob in mobs:
+            if not mob.is_alive():
+                continue
+            center = mob.position
+            radius = 0.5
+            oc = origin - center
+            a = numpy.dot(direction, direction)
+            b = 2.0 * numpy.dot(oc, direction)
+            c = numpy.dot(oc, oc) - radius * radius
+            disc = b*b - 4*a*c
+            if disc >= 0:
+                t = (-b - math.sqrt(disc)) / (2*a)
+                if 0 < t < best_dist:
+                    best_dist = t
+                    best_mob = mob
+    return best_mob
+
+
+class Particle:
+    __slots__ = ('position', 'life')
+    def __init__(self, position):
+        self.position = numpy.array(position, dtype=float)
+        self.life = 1.0
+
+
+class Mob:
+    def __init__(self, position, chunk_cx, chunk_cz, speed=2.5, follow_range=15.0,
+                 attack_range=2.0, damage=10, npc_type="basic"):
+        self.position = numpy.array(position, dtype=float)
+        self.chunk_cx = chunk_cx
+        self.chunk_cz = chunk_cz
+        self.speed = speed
+        self.follow_range = follow_range
+        self.attack_range = attack_range
+        self.damage = damage
+        self.npc_type = npc_type
+        self.max_health = 50
+        self.health = self.max_health
+        self.attack_cooldown = 0.0
+
+    def update(self, dt, player_pos, phys_size):
+        dx = player_pos[0] - self.position[0]
+        dz = player_pos[2] - self.position[2]
+        dist_sq = dx*dx + dz*dz
+        if dist_sq < self.follow_range * self.follow_range and dist_sq > 0.01:
+            dist = math.sqrt(dist_sq)
+            move = numpy.array([dx / dist, 0.0, dz / dist]) * self.speed * dt
+            new_pos = self.position + move
+            new_pos[1] = get_height(new_pos[0], new_pos[2]) + 0.5
+            self.position = new_pos
+        new_cx = int(self.position[0] // phys_size)
+        new_cz = int(self.position[2] // phys_size)
+        return new_cx, new_cz
+
+    def to_dict(self):
+        return {
+            'pos_x': self.position[0], 'pos_y': self.position[1], 'pos_z': self.position[2],
+            'npc_type': self.npc_type, 'speed': self.speed,
+            'follow_range': self.follow_range, 'attack_range': self.attack_range,
+            'damage': self.damage, 'health': self.health, 'max_health': self.max_health
+        }
+
+    @classmethod
+    def from_dict(cls, data, chunk_cx, chunk_cz):
+        mob = cls(
+            position=(data['pos_x'], data['pos_y'], data['pos_z']),
+            chunk_cx=chunk_cx, chunk_cz=chunk_cz,
+            speed=data.get('speed', 2.5), follow_range=data.get('follow_range', 15.0),
+            attack_range=data.get('attack_range', 2.0), damage=data.get('damage', 10),
+            npc_type=data.get('npc_type', 'basic')
+        )
+        mob.health = data.get('health', mob.max_health)
+        mob.max_health = data.get('max_health', mob.max_health)
+        return mob
+
+    def take_damage(self, amount):
+        self.health -= amount
+        return self.health <= 0
+
+    def attack_enemy(self, enemy, dt):
+        if self.attack_cooldown > 0:
+            self.attack_cooldown -= dt
+            return False
+        dx = enemy.position[0] - self.position[0]
+        dz = enemy.position[2] - self.position[2]
+        dist_sq = dx*dx + dz*dz
+        if dist_sq < self.attack_range * self.attack_range:
+            enemy.take_damage(self.damage)
+            self.attack_cooldown = 1.0
+            return True
+        return False
+
+    def is_alive(self):
+        return self.health > 0
+
+
+class MobModel:
+    # ... (unchanged, same as before) ...
+    def __init__(self, shader: Shader):
+        self.shader = shader
+        self.vao = glGenVertexArrays(1)
+        self.vbo = glGenBuffers(1)
+        self.ebo = glGenBuffers(1)
+        self._build_cube_buffers()
+        self._setup_buffers()
+
+    def _build_cube_buffers(self):
+        vertices = numpy.array([
+            -0.5, -0.5,  0.5,  0, 0, 1,
+             0.5, -0.5,  0.5,  0, 0, 1,
+             0.5,  0.5,  0.5,  0, 0, 1,
+            -0.5,  0.5,  0.5,  0, 0, 1,
+            -0.5, -0.5, -0.5,  0, 0, -1,
+             0.5, -0.5, -0.5,  0, 0, -1,
+             0.5,  0.5, -0.5,  0, 0, -1,
+            -0.5,  0.5, -0.5,  0, 0, -1,
+            -0.5, -0.5, -0.5, -1, 0, 0,
+            -0.5, -0.5,  0.5, -1, 0, 0,
+            -0.5,  0.5,  0.5, -1, 0, 0,
+            -0.5,  0.5, -0.5, -1, 0, 0,
+             0.5, -0.5, -0.5,  1, 0, 0,
+             0.5, -0.5,  0.5,  1, 0, 0,
+             0.5,  0.5,  0.5,  1, 0, 0,
+             0.5,  0.5, -0.5,  1, 0, 0,
+            -0.5,  0.5, -0.5,  0, 1, 0,
+             0.5,  0.5, -0.5,  0, 1, 0,
+             0.5,  0.5,  0.5,  0, 1, 0,
+            -0.5,  0.5,  0.5,  0, 1, 0,
+            -0.5, -0.5, -0.5,  0, -1, 0,
+             0.5, -0.5, -0.5,  0, -1, 0,
+             0.5, -0.5,  0.5,  0, -1, 0,
+            -0.5, -0.5,  0.5,  0, -1, 0,
+        ], dtype=numpy.float32)
+        indices = numpy.array([
+            0,1,2, 0,2,3, 4,5,6, 4,6,7, 8,9,10, 8,10,11,
+            12,13,14, 12,14,15, 16,17,18, 16,18,19, 20,21,22, 20,22,23
+        ], dtype=numpy.uint32)
+        self.vertex_data = vertices
+        self.index_data = indices
+        self.index_count = len(indices)
+
+    def _setup_buffers(self):
+        glBindVertexArray(self.vao)
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
+        glBufferData(GL_ARRAY_BUFFER, self.vertex_data.nbytes, self.vertex_data, GL_STATIC_DRAW)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.ebo)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, self.index_data.nbytes, self.index_data, GL_STATIC_DRAW)
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*4, ctypes.c_void_p(0))
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*4, ctypes.c_void_p(3*4))
+        glEnableVertexAttribArray(1)
+        glBindVertexArray(0)
+
+    def draw(self, mob, view, projection, light_dir, light_intensity):
+        glUseProgram(self.shader.program)
+        self.shader.set_mat4("uView", view)
+        self.shader.set_mat4("uProjection", projection)
+        self.shader.set_vec3("uLightDir", light_dir)
+        self.shader.set_float("uLightIntensity", light_intensity)
+        model = numpy.eye(4, dtype=numpy.float32)
+        model[0, 3] = mob.position[0]
+        model[1, 3] = mob.position[1]
+        model[2, 3] = mob.position[2]
+        scale = 0.6
+        model[0,0] = model[1,1] = model[2,2] = scale
+        self.shader.set_mat4("uModel", model)
+        glBindVertexArray(self.vao)
+        glDrawElements(GL_TRIANGLES, self.index_count, GL_UNSIGNED_INT, None)
+        glBindVertexArray(0)
+
+
+class MobManager:
+    def __init__(self, player, chunk_manager, chunk_size=32, spacing=1.0):
+        self.player = player
+        self.chunk_manager = chunk_manager
+        self.serializer = chunk_manager.serializer
+        self.chunk_size = chunk_size
+        self.spacing = spacing
+        self.phys_size = (chunk_size - 1) * spacing
+        self.active_mobs = {}
+        self.loaded_chunks = set()
+        self.pending_mobs = {}
+
+        # Mob model
+        self.mob_model = MobModel(Shader(MOB_VERTEX_SHADER_SRC, MOB_FRAGMENT_SHADER_SRC))
+
+        # Particle system
+        self.particles = []
+        self.particle_shader = Shader(PARTICLE_AMMO_EXPLOSION_VERTEX_SHADER_SRC, PARTICLE_AMMO_EXPLOSION_FRAGMENT_SHADER_SRC)
+        self.particle_vao = glGenVertexArrays(1)
+        self.particle_vbo = glGenBuffers(1)
+        glBindVertexArray(self.particle_vao)
+        glBindBuffer(GL_ARRAY_BUFFER, self.particle_vbo)
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, None)
+        glEnableVertexAttribArray(0)
+        glBindVertexArray(0)
+
+        # Health bar rendering (GUI-like)
+        self._init_health_bar_ui()
+
+    def _init_health_bar_ui(self):
+        # Reuse the same rect shader as GUI (simplified)
+        self.health_shader = compileProgram(
+            compileShader(RECT_VERTEX_SHADER, GL_VERTEX_SHADER),
+            compileShader(RECT_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
+        )
+        # Quad VAO (same as stats panel)
+        quad_verts = numpy.array([
+            -0.5, -0.5, 0.0, 0.0,
+             0.5, -0.5, 1.0, 0.0,
+             0.5,  0.5, 1.0, 1.0,
+            -0.5,  0.5, 0.0, 1.0,
+        ], dtype=numpy.float32)
+        quad_indices = numpy.array([0,1,2, 0,2,3], dtype=numpy.uint32)
+        self.health_vao = glGenVertexArrays(1)
+        self.health_vbo = glGenBuffers(1)
+        self.health_ebo = glGenBuffers(1)
+        glBindVertexArray(self.health_vao)
+        glBindBuffer(GL_ARRAY_BUFFER, self.health_vbo)
+        glBufferData(GL_ARRAY_BUFFER, quad_verts.nbytes, quad_verts, GL_STATIC_DRAW)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.health_ebo)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, quad_indices.nbytes, quad_indices, GL_STATIC_DRAW)
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(0))
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(8))
+        glEnableVertexAttribArray(1)
+        glBindVertexArray(0)
+        self.health_quad_count = 6
+        self.health_uScreenSize = glGetUniformLocation(self.health_shader, "uScreenSize")
+        self.health_uColor = glGetUniformLocation(self.health_shader, "uColor")
+        self.health_uOffset = glGetUniformLocation(self.health_shader, "uOffset")
+        self.health_uScale = glGetUniformLocation(self.health_shader, "uScale")
+
+    def _generate_mobs_for_chunk(self, cx, cz):
+        world_min_x = cx * self.phys_size
+        world_min_z = cz * self.phys_size
+        world_max_x = world_min_x + self.phys_size
+        world_max_z = world_min_z + self.phys_size
+        count = random.randint(1, 2)
+        mobs = []
+        for _ in range(count):
+            x = random.uniform(world_min_x, world_max_x)
+            z = random.uniform(world_min_z, world_max_z)
+            y = get_height(x, z) + 0.5
+            mob = Mob((x, y, z), cx, cz)
+            mob.max_health = random.randint(30, 80)
+            mob.health = mob.max_health
+            mob.damage = random.randint(8, 20)
+            mobs.append(mob)
+        return mobs
+
+    def _load_mobs_for_chunk(self, cx, cz):
+        mobs_data = self.serializer.load_mobs(cx, cz)
+        if mobs_data is None:
+            mobs_data = []
+        pending = self.pending_mobs.pop((cx, cz), [])
+        if pending:
+            mobs_data.extend(pending)
+        if mobs_data:
+            return [Mob.from_dict(d, cx, cz) for d in mobs_data]
+        else:
+            return self._generate_mobs_for_chunk(cx, cz)
+
+    def update(self, dt):
+        # Remove dead mobs
+        for chunk_key, mobs in list(self.active_mobs.items()):
+            self.active_mobs[chunk_key] = [m for m in mobs if m.is_alive()]
+
+        current_chunks = set(self.chunk_manager.chunks.keys())
+        # Unload
+        for chunk_key in list(self.loaded_chunks):
+            if chunk_key not in current_chunks:
+                if chunk_key in self.active_mobs:
+                    del self.active_mobs[chunk_key]
+                self.loaded_chunks.discard(chunk_key)
+        # Load
+        for chunk_key in current_chunks:
+            if chunk_key not in self.loaded_chunks:
+                mobs = self._load_mobs_for_chunk(chunk_key[0], chunk_key[1])
+                self.active_mobs[chunk_key] = mobs
+                self.loaded_chunks.add(chunk_key)
+
+        player_pos = numpy.array(self.player.position)
+        mobs_to_remove = []
+        mobs_to_add = []
+        for chunk_key, mobs in list(self.active_mobs.items()):
+            for i, mob in enumerate(mobs):
+                new_cx, new_cz = mob.update(dt, player_pos, self.phys_size)
+                new_key = (new_cx, new_cz)
+                if new_key != chunk_key:
+                    mobs_to_remove.append((chunk_key, i, mob))
+                    if new_key in self.loaded_chunks:
+                        mob.chunk_cx = new_cx
+                        mob.chunk_cz = new_cz
+                        mobs_to_add.append((new_key, mob))
+                    else:
+                        pending = self.pending_mobs.setdefault(new_key, [])
+                        pending.append(mob.to_dict())
+                mob.attack_enemy(self.player, dt)
+        # Apply removals
+        for chunk_key, idx, mob in mobs_to_remove:
+            if chunk_key in self.active_mobs:
+                lst = self.active_mobs[chunk_key]
+                if idx < len(lst) and lst[idx] is mob:
+                    lst.pop(idx)
+        # Apply additions
+        for new_key, mob in mobs_to_add:
+            self.active_mobs.setdefault(new_key, []).append(mob)
+
+        # Update particles
+        self.particles = [p for p in self.particles if p.life > 0]
+        for p in self.particles:
+            p.life -= dt * 2.0
+
+    def draw_health_bars(self, view, proj, screen_width, screen_height):
+        """Call after 3D rendering, with depth test disabled."""
+        if not self.active_mobs:
+            return
+        glDisable(GL_DEPTH_TEST)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+        glUseProgram(self.health_shader)
+        glUniform2f(self.health_uScreenSize, screen_width, screen_height)
+        # Helper to project world to screen
+        def world_to_screen(pos, view_mat, proj_mat, width, height):
+            clip = proj_mat @ view_mat @ numpy.append(pos, 1.0)
+            if clip[3] == 0:
+                return None
+            ndc = clip[:3] / clip[3]
+            if ndc[2] < -1 or ndc[2] > 1:
+                return None
+            x = (ndc[0] + 1.0) * 0.5 * width
+            y = (1.0 - (ndc[1] + 1.0) * 0.5) * height
+            return (x, y)
+        bar_width = 60
+        bar_height = 8
+        y_offset = 0.8
+        for mobs in self.active_mobs.values():
+            for mob in mobs:
+                # Project mob position
+                world_pos = mob.position + numpy.array([0.0, y_offset, 0.0])
+                screen_pos = world_to_screen(world_pos, view, proj, screen_width, screen_height)
+                if screen_pos is None:
+                    continue
+                x, y = screen_pos
+                x -= bar_width / 2
+                # Background (dark red)
+                glUniform4f(self.health_uColor, 0.3, 0.0, 0.0, 0.8)
+                self._draw_health_rect(x, y, bar_width, bar_height, screen_width, screen_height)
+                # Foreground (green fill)
+                fill_width = bar_width * (mob.health / mob.max_health)
+                glUniform4f(self.health_uColor, 0.0, 0.8, 0.0, 0.9)
+                self._draw_health_rect(x, y, fill_width, bar_height, screen_width, screen_height)
+        glDisable(GL_BLEND)
+        glEnable(GL_DEPTH_TEST)
+
+    def draw(self, view, projection, light_dir, light_intensity, screen_width, screen_height):
+        # Draw mobs
+        for mobs in self.active_mobs.values():
+            for mob in mobs:
+                self.mob_model.draw(mob, view, projection, light_dir, light_intensity)
+        if self.particles: # Draw particles (point sprites)
+            glEnable(GL_BLEND)
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+            glEnable(GL_PROGRAM_POINT_SIZE)
+            self.particle_shader.use()
+            self.particle_shader.set_mat4("uView", view)
+            self.particle_shader.set_mat4("uProjection", projection)
+            glBindVertexArray(self.particle_vao)
+            # Build vertex buffer
+            positions = numpy.array([p.position for p in self.particles], dtype=numpy.float32).flatten()
+            glBindBuffer(GL_ARRAY_BUFFER, self.particle_vbo)
+            glBufferData(GL_ARRAY_BUFFER, positions.nbytes, positions, GL_DYNAMIC_DRAW)
+            for i, p in enumerate(self.particles):
+                self.particle_shader.set_float("uSize", 20.0)
+                self.particle_shader.set_float("uLife", p.life)
+                glDrawArrays(GL_POINTS, i, 1)
+            glBindVertexArray(0)
+            glDisable(GL_PROGRAM_POINT_SIZE)
+            glDisable(GL_BLEND)
+        self.draw_health_bars(view, projection, screen_width, screen_height)
+
+    def _draw_health_rect(self, x, y, w, h, screen_w, screen_h):
+        y_bottom = screen_h - (y + h)
+        glUniform2f(self.health_uOffset, x + w/2, y_bottom + h/2)
+        glUniform2f(self.health_uScale, w, h)
+        glBindVertexArray(self.health_vao)
+        glDrawElements(GL_TRIANGLES, self.health_quad_count, GL_UNSIGNED_INT, None)
+        glBindVertexArray(0)
+
+    def add_particles(self, position, count=8):
+        for _ in range(count):
+            self.particles.append(Particle(position))
+
+    def shutdown(self):
+        for (cx, cz), mobs in self.active_mobs.items():
+            data = [mob.to_dict() for mob in mobs]
+            self.serializer.save_mobs(cx, cz, data)
+        for (cx, cz), pending_list in self.pending_mobs.items():
+            existing = self.serializer.load_mobs(cx, cz)
+            if existing is None:
+                existing = []
+            existing.extend(pending_list)
+            self.serializer.save_mobs(cx, cz, existing)
+        self.active_mobs.clear()
+        self.loaded_chunks.clear()
+        self.pending_mobs.clear()

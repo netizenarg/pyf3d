@@ -6,7 +6,7 @@ from OpenGL.GL.shaders import compileProgram, compileShader
 import ctypes
 
 from camera import get_height
-from sky_shaders import *
+from shaders.sky_shdr import *
 
 
 class CloudBlob:
@@ -40,18 +40,23 @@ class Cloud:
         self.position += self.direction * self.speed * dt
 
 class Sky:
-    def __init__(self, chunk_manager, cloud_count_per_chunk=5, star_count=500, snow_count=500, snow_draw=False, distance = 200.0):
+    def __init__(self, chunk_manager, cloud_count_per_chunk=5,
+                 star_count=500, snow_count=500, snow_draw=False, distance = 200.0, day_duration=60.0,
+                 draw_fog=False, fog_color=numpy.array([0.1, 0.2, 0.3]), fog_start=50, fog_end=70):
         self.chunk_manager = chunk_manager
         self.cloud_count_per_chunk = cloud_count_per_chunk
         self.clouds = {}
         self.star_count = star_count
         self.time_of_day = 0.0
-        self.day_duration = 60.0
+        self.day_duration = day_duration
         self.snow_draw = snow_draw
         self.snow_count = snow_count
         self.distance = distance
+        self.draw_fog = draw_fog
+        self.fog_color = fog_color
+        self.fog_start = fog_start
+        self.fog_end = fog_end
         self.is_day_cached = True
-
         # Generate static star positions on a sphere
         self.star_positions = []
         radius = 800.0
@@ -86,25 +91,27 @@ class Sky:
 
     def get_sun_direction(self):
         """Return normalized direction from camera to sun."""
-        sun_angle = (self.time_of_day - 0.25) * 2 * math.pi
-        return numpy.array([math.cos(sun_angle), math.sin(sun_angle), 0.0], dtype=numpy.float32)
+        angle = (self.time_of_day - 0.25) * 2 * math.pi
+        return numpy.array([math.cos(angle), math.sin(angle), 0.0], dtype=numpy.float32)
 
-    def get_combined_light(self, moon_max_intensity=0.5):
+    def get_combined_light(self, moon_max_intensity=0.3):
         sun_dir = self.get_sun_direction()
-        sun_intensity = self.day_factor
-        if sun_dir[1] <= 0:
-            sun_intensity = 0
-        moon_angle = (self.time_of_day - 0.25) * 2 * math.pi + math.pi
+        # Sun intensity: full when above horizon (y > 0)
+        sun_intensity = self.day_factor if sun_dir[1] > 0 else 0
+
+        # Moon is opposite to sun
+        moon_angle = (self.time_of_day - 0.5) * 2 * math.pi + math.pi
         moon_dir = numpy.array([math.cos(moon_angle), math.sin(moon_angle), 0.0], dtype=numpy.float32)
-        if moon_dir[1] <= 0:   # moon below horizon
-            moon_intensity = 0
-        else:
-            moon_intensity = (1 - self.day_factor) * moon_max_intensity
+        moon_intensity = (1 - self.day_factor) * moon_max_intensity if moon_dir[1] > 0 else 0
+
         combined = sun_dir * sun_intensity + moon_dir * moon_intensity
         intensity = numpy.linalg.norm(combined)
         if intensity < 0.01:
-            return numpy.array([0.0, 1.0, 0.0], dtype=numpy.float32), 0.0
+            # Fallback: dim light from above
+            return numpy.array([0.0, 1.0, 0.0], dtype=numpy.float32), 0.2
         light_dir = combined / intensity
+        # Clamp intensity for night
+        intensity = max(0.2, min(1.0, intensity))
         return light_dir, intensity
 
     def init_shaders(self):
@@ -248,6 +255,13 @@ class Sky:
         glUseProgram(self.sky_shader)
         glUniform1f(glGetUniformLocation(self.sky_shader, "uDayFactor"), self.day_factor)
         glUniform2f(glGetUniformLocation(self.sky_shader, "uScreenSize"), screen_width, screen_height)
+
+        if self.draw_fog:
+            glUniform1i(glGetUniformLocation(self.sky_shader, "uDrawFog"), 1)
+            glUniform3fv(glGetUniformLocation(self.sky_shader, "uFogColor"), 1, self.fog_color)
+        else:
+            glUniform1i(glGetUniformLocation(self.sky_shader, "uDrawFog"), 0)
+
         glBindVertexArray(self._sky_vao)
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, None)
         glBindVertexArray(0)
@@ -274,6 +288,9 @@ class Sky:
             self.draw_celestial_sphere(view, proj, moon_world_pos,
                                     numpy.array([0.9, 0.9, 0.9], dtype=numpy.float32), 15.0, moon_light_dir)
         glEnable(GL_DEPTH_TEST)
+        if self.draw_fog:
+            glClearColor(self.fog_color[0], self.fog_color[1], self.fog_color[2], 1.0)
+            glClear(GL_COLOR_BUFFER_BIT)
 
     def draw_foreground(self, view, proj, camera_pos, current_time):
         # Clouds – drawn with alpha blending

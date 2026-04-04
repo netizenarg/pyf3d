@@ -20,18 +20,24 @@ import random
 import sys
 import ctypes
 
+from shaders.shader import Shader
+from shaders.terrain_shdr import VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC
+
 from camera import get_height
 from config import Config
 from gui import Menu
 from gui_stats import StatsPanel
+from gui_fps import FPSOverlay
 from compass import Compass
 from camera import Camera
-from shader import Shader, VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC
 from chunks import ChunkManager
 from target import Target
 from sky import Sky
 from player import Player
 from player_model import PlayerModel
+from health import HealthManager
+from mobs import get_aimed_mob, MobManager
+from weapon import Ammo, Weapon
 
 
 def compute_projection(width, height):
@@ -67,6 +73,14 @@ def main():
     random_range = config.get("random_spawn_range", 500)
     camera_mode = config.get("camera_mode", 0)
     rotate_only_horizontal = config.get("rotate_only_horizontal", True)
+    draw_fog = config.get("draw_fog", False)
+    fog_color = numpy.array([0.1, 0.2, 0.3])
+    #fog_start = (chunk_size - 1) * load_radius
+    #fog_end = fog_start + 40.0
+    # Compute physical distance to furthest loaded chunk corner
+    max_visible_dist = (chunk_size - 1) * (load_radius + 0.5)  # e.g., 15 * 1.5 = 22.5
+    fog_start = max_visible_dist * 0.6   # 13.5
+    fog_end = max_visible_dist * 0.9     # 20.25
 
     player = Player(db_path, height=player_height)
 
@@ -113,18 +127,29 @@ def main():
         spacing=terrain_spacing,
         player=player
     )
-
     sky = Sky(chunk_manager,
               cloud_count_per_chunk=cloud_count_per_chunk,
               star_count=star_count,
               snow_count=snow_count,
-              snow_draw=snow_draw)
-    sky.day_duration = day_duration
+              snow_draw=snow_draw,
+              day_duration=day_duration,
+              draw_fog=draw_fog,
+              fog_color=fog_color,
+              fog_start=fog_start,
+              fog_end=fog_end)
 
     shader_3d = Shader(VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC)
     shader_crosshair = Shader(CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC)
 
+    health_manager = HealthManager(player, chunk_manager,
+                                chunk_size=chunk_size, spacing=terrain_spacing)
+
+    mob_manager = MobManager(player, chunk_manager,
+                             chunk_size=chunk_size, spacing=terrain_spacing)
+    player.set_mob_manager(mob_manager)
+
     player_model = PlayerModel(shader_3d)
+    player.set_model(player_model)
 
     targets = []
     for _ in range(TARGET_COUNT):
@@ -144,9 +169,15 @@ def main():
     glEnableVertexAttribArray(0)
     glBindVertexArray(0)
 
+    Ammo.init_geometry()
+    weapon = Weapon(player, damage=25, ammo_speed=35.0, ammo_range=60.0, cooldown=0.3)
+    player.set_weapon(weapon)
+    ammo_list = [] # Create a list for active ammo
+
     compass = Compass(screen.width, screen.height, camera, draw_compass, compass_scale)
     stats_panel = StatsPanel(screen.width, screen.height, draw_stats)
     menu = Menu(screen.width, screen.height, config, camera)
+    fps_overlay = FPSOverlay(screen.width, screen.height, config.get("show_fps", False))
 
     def resize_callback(window, width, height):
         nonlocal proj
@@ -175,10 +206,6 @@ def main():
                     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_NORMAL)
                 else:
                     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
-            elif key == glfw.KEY_F10:
-                compass.enabled = not compass.enabled
-            elif key == glfw.KEY_F11:
-                stats_panel.enabled = not stats_panel.enabled
             elif key == glfw.KEY_V:
                 if camera.mode == 1:
                     ground_y = get_height(player.position[0], player.position[2])
@@ -186,6 +213,14 @@ def main():
                     camera.position = numpy.array([player.position[0], eye_y, player.position[2]])
                     camera.update_vectors()   # recalc front/right/up from current yaw/pitch
                 camera.set_mode(1 - camera.mode)
+            elif key == glfw.KEY_F10:
+                compass.enabled = not compass.enabled
+            elif key == glfw.KEY_F11:
+                stats_panel.enabled = not stats_panel.enabled
+            elif key == glfw.KEY_F12:
+                fps_overlay.enabled = not fps_overlay.enabled
+                config["show_fps"] = fps_overlay.enabled
+                Config.save(config) # persist
 
     def mouse_button_callback(window, button, action, mods):
         if button == glfw.MOUSE_BUTTON_LEFT and action == glfw.PRESS:
@@ -193,23 +228,37 @@ def main():
                 xpos, ypos = glfw.get_cursor_pos(window)
                 menu.handle_mouse(xpos, ypos, button)
                 return
-            # Shooting direction depends on mode
+
+            weapon_pos = player.position
+
+            # Determine shooting direction based on camera mode
             if camera.mode == 1:
-                yaw_rad = math.radians(camera.yaw)
-                pitch_rad = math.radians(camera.pitch)
-                ray_dir = numpy.array([
-                    math.cos(yaw_rad) * math.cos(pitch_rad),
-                    math.sin(pitch_rad),
-                    math.sin(yaw_rad) * math.cos(pitch_rad)
+                # Third‑person: shoot away from camera (opposite of camera's forward)
+                ray_dir = -camera.front
+                offset = player.weapon.offset
+                c, s = math.cos(player.yaw), math.sin(player.yaw)
+                world_offset = numpy.array([
+                    offset[0] * c - offset[2] * s,
+                    offset[1],
+                    offset[0] * s + offset[2] * c
                 ])
+                weapon_pos += world_offset
             else:
+                # First‑person: shoot where camera is looking
                 ray_dir = camera.front
+
+            # Optional target handling (kept for compatibility)
             for target in targets:
                 if target.active and target.hit(camera.position, ray_dir):
                     target.active = False
                     target.position = camera.get_target_position()
                     target.active = True
                     break
+
+            # Spawn ammo from weapon position
+            ammo = player.weapon.shoot(weapon_pos, ray_dir, glfw.get_time())
+            if ammo:
+                ammo_list.append(ammo)
 
     glfw.set_key_callback(window, key_callback)
     glfw.set_mouse_button_callback(window, mouse_button_callback)
@@ -247,8 +296,31 @@ def main():
 
         # ----- Update world (chunks, sky, etc.) -----
         chunk_manager.update(camera.position)
+        health_manager.update(dt)
+        mob_manager.update(dt)
         sky.update(dt)
         light_dir, light_intensity = sky.get_combined_light()
+
+        # Update ammo
+        for ammo in ammo_list[:]:
+            ammo.update(dt)
+            if not ammo.active:
+                ammo_list.remove(ammo)
+                continue
+            # Check collision with mobs
+            center, radius = ammo.get_collision_sphere()
+            for mobs in mob_manager.active_mobs.values():
+                for mob in mobs:
+                    if not mob.is_alive():
+                        continue
+                    dist = numpy.linalg.norm(mob.position - center)
+                    if dist < radius + 0.5:  # mob radius ~0.5
+                        mob.take_damage(ammo.damage)
+                        mob_manager.add_particles(ammo.position, count=12)
+                        ammo.active = False
+                        break
+                if not ammo.active:
+                    break
 
         player.speed = numpy.linalg.norm(numpy.array(player.position) - prev_player_pos) / dt if dt > 0 else 0.0
 
@@ -256,8 +328,8 @@ def main():
             stats_panel.update(
                 position=player.position,
                 speed=player.speed,
-                life_percent=player.life_percent,
-                mana_percent=player.mana_percent,
+                life=player.life,
+                mana=player.mana,
                 weapon_name=player.weapon_name,
                 ammo_count=player.ammo_count,
                 familiar_name=player.familiar_name
@@ -272,11 +344,23 @@ def main():
         shader_3d.set_mat4("uProjection", proj)
         shader_3d.set_vec3("uLightDir", light_dir)
         shader_3d.set_float("uLightIntensity", light_intensity)
+        # Fog settings
+        shader_3d.set_vec3("uCameraPos", camera.position)
+        if draw_fog:
+            shader_3d.set_vec3("uFogColor", fog_color)
+            shader_3d.set_float("uFogStart", fog_start)
+            shader_3d.set_float("uFogEnd", fog_end)
+        else:
+            shader_3d.set_vec3("uFogColor", fog_color)   # any color, won't be used
+            shader_3d.set_float("uFogStart", 1e9)
+            shader_3d.set_float("uFogEnd", 2e9)
 
         sky.draw_background(view, proj, camera.position, glfw.get_time(), screen.width, screen.height)
 
         shader_3d.use()
         chunk_manager.draw(shader_3d)
+        health_manager.draw(view, proj, light_dir, light_intensity)
+        mob_manager.draw(view, proj, light_dir, light_intensity, screen.width, screen.height)
 
         for target in targets:
             target.draw(shader_3d, view, proj, light_dir)
@@ -289,8 +373,12 @@ def main():
                 if numpy.linalg.norm(facing) < 0.1:
                     facing = numpy.array([0.0, 0.0, 1.0])
                 facing = facing / numpy.linalg.norm(facing)
-            player_yaw = math.atan2(facing[0], facing[2])
-            player_model.draw(player.position, player_yaw, view, proj, light_dir, light_intensity)
+            player.yaw = math.atan2(facing[0], facing[2])
+            # Draw weapon
+            player.draw(view, proj, light_dir, light_intensity)
+
+        for ammo in ammo_list:
+            ammo.draw(view, proj)
 
         sky.draw_foreground(view, proj, camera.position, glfw.get_time())
 
@@ -306,10 +394,13 @@ def main():
         compass.draw()
         stats_panel.draw()
         menu.draw()
+        fps_overlay.draw(dt)
 
         glfw.swap_buffers(window)
         glfw.poll_events()
 
+    mob_manager.shutdown()
+    health_manager.shutdown()
     chunk_manager.shutdown()
     chunk_manager.save_all_chunks()
     player.save()

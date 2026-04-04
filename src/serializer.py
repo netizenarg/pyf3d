@@ -1,4 +1,6 @@
+import numpy
 import sqlite3
+
 
 class Serializer:
     def __init__(self, db_path):
@@ -16,8 +18,8 @@ class Serializer:
                     pos_y REAL,
                     pos_z REAL,
                     speed REAL,
-                    life_percent REAL,
-                    mana_percent REAL,
+                    life INTEGER,
+                    mana INTEGER,
                     weapon_name TEXT,
                     ammo_count INTEGER,
                     familiar_name TEXT,
@@ -37,6 +39,24 @@ class Serializer:
                     PRIMARY KEY (cx, cz)
                 )
             ''')
+            # table for healthes
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS healthes (
+                    cx INTEGER,
+                    cz INTEGER,
+                    data BLOB,
+                    PRIMARY KEY (cx, cz)
+                )
+            ''')
+            # table for mobs
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS mobs (
+                    cx INTEGER,
+                    cz INTEGER,
+                    data BLOB,
+                    PRIMARY KEY (cx, cz)
+                )
+            ''')
             conn.commit()
 
     def save_player(self, player_data):
@@ -44,10 +64,10 @@ class Serializer:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO player_stats
-                (id, pos_x, pos_y, pos_z, speed, life_percent, mana_percent,
+                (id, pos_x, pos_y, pos_z, speed, life, mana,
                 weapon_name, ammo_count, familiar_name, portal_x, portal_y, portal_z, height)
-                VALUES (1, :pos_x, :pos_y, :pos_z, :speed, :life_percent,
-                        :mana_percent, :weapon_name, :ammo_count, :familiar_name,
+                VALUES (1, :pos_x, :pos_y, :pos_z, :speed, :life,
+                        :mana, :weapon_name, :ammo_count, :familiar_name,
                         :portal_x, :portal_y, :portal_z, :height)
             ''', player_data)
 
@@ -59,7 +79,7 @@ class Serializer:
             if row:
                 return {
                     'pos_x': row[1], 'pos_y': row[2], 'pos_z': row[3],
-                    'speed': row[4], 'life_percent': row[5], 'mana_percent': row[6],
+                    'speed': row[4], 'life': row[5], 'mana': row[6],
                     'weapon_name': row[7], 'ammo_count': row[8], 'familiar_name': row[9],
                     'portal_x': row[10], 'portal_y': row[11], 'portal_z': row[12],
                     'height': row[13]
@@ -94,3 +114,52 @@ class Serializer:
                 indices = numpy.frombuffer(indices_bytes, dtype=numpy.uint32).reshape(num_indices)
                 return vertices, indices
             return None, None
+
+    def save_mobs(self, cx, cz, mobs_data):
+        """Save list of mob dictionaries for a chunk as JSON."""
+        import json
+        json_str = json.dumps(mobs_data)
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO mobs (cx, cz, data)
+                VALUES (?, ?, ?)
+            ''', (cx, cz, json_str))
+            conn.commit()
+
+    def load_mobs(self, cx, cz):
+        """Load list of mob dictionaries for a chunk, or None if none."""
+        import json
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT data FROM mobs WHERE cx = ? AND cz = ?', (cx, cz))
+            row = cursor.fetchone()
+            if row:
+                return json.loads(row[0])
+            return None
+
+    def save_health(self, cx, cz, cube_dict):
+        """Save a health dict for a chunk, or delete if None."""
+        import json
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            if cube_dict is None:
+                cursor.execute('DELETE FROM healthes WHERE cx = ? AND cz = ?', (cx, cz))
+            else:
+                json_str = json.dumps(cube_dict)
+                cursor.execute('''
+                    INSERT OR REPLACE INTO healthes (cx, cz, data)
+                    VALUES (?, ?, ?)
+                ''', (cx, cz, json_str))
+            conn.commit()
+
+    def load_health(self, cx, cz):
+        """Load health dict for a chunk, or None if missing."""
+        import json
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT data FROM healthes WHERE cx = ? AND cz = ?', (cx, cz))
+            row = cursor.fetchone()
+            if row:
+                return json.loads(row[0])
+            return None

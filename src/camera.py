@@ -17,7 +17,7 @@ class Camera:
         self.yaw = yaw
         self.pitch = 0.0
         self.distance = 9.0 # Third‑person distance from player
-        self.height_offset = 1.0 # Vertical offset above the orbit point
+        self.height_offset = 5.0 # Vertical offset above the orbit point
         self.rotate_only_horizontal = self.rotate_only_horizontal_default = rotate_only_horizontal
         if self.mode == 1:
             self.pitch = 20.0

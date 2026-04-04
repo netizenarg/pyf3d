@@ -14,6 +14,8 @@ SKY_FRAGMENT_SHADER = """
 in vec2 vTexCoord;
 uniform float uDayFactor;
 uniform vec2 uScreenSize;
+uniform bool uDrawFog;
+uniform vec3 uFogColor;
 out vec4 FragColor;
 
 vec3 nightZenith = vec3(0.05, 0.05, 0.15);
@@ -22,10 +24,15 @@ vec3 dayZenith = vec3(0.2, 0.5, 0.9);
 vec3 dayHorizon = vec3(1.0, 0.8, 0.5);
 
 void main() {
-    float t = vTexCoord.y;
+    float t = vTexCoord.y; // 0 = horizon, 1 = zenith
     vec3 zenith = mix(nightZenith, dayZenith, uDayFactor);
     vec3 horizon = mix(nightHorizon, dayHorizon, uDayFactor);
     vec3 color = mix(horizon, zenith, t);
+    if (uDrawFog) {
+        // At the horizon (t=0), fully fog; at zenith, no fog
+        float fogFactor = 1.0 - t;
+        color = mix(color, uFogColor, fogFactor);
+    }
     FragColor = vec4(color, 1.0);
 }
 """
@@ -45,7 +52,7 @@ void main() {
     gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
     vec3 normal = normalize(aNormal);
     float diff = max(dot(normal, normalize(uLightDir)), 0.2);
-    vColor = vec3(1.0) * diff;   // base white, multiplied by diffuse
+    vColor = vec3(1.0) * diff;
 }
 """
 
@@ -99,7 +106,6 @@ out float vBrightness;
 void main() {
     vec4 worldPos = vec4(aPos, 1.0);
     gl_Position = uProjection * uView * worldPos;
-    // Use position as seed for twinkling
     float seed = sin(aPos.x * 10.0 + aPos.y * 8.0 + aPos.z * 12.0);
     float twinkle = 0.5 + 0.5 * sin(uTime * 2.0 + seed * 100.0);
     vBrightness = 0.6 + 0.4 * twinkle;

@@ -1,5 +1,7 @@
+import logging
 import json
 import os
+
 
 class Config:
     CONFIG_FILE = "config.json"
@@ -10,9 +12,9 @@ class Config:
         "movement_speed": 10.0,
         "player_height": 1.5,
         "terrain_spacing": 1.0,
-        "chunk_size": 32,
-        "load_radius": 3,
-        "cloud_count_per_chunk": 3,
+        "chunk_size": 16,
+        "load_radius": 1,
+        "cloud_count_per_chunk": 2,
         "day_duration": 60.0,
         "star_count": 500,
         "snow_count": 500,
@@ -24,7 +26,9 @@ class Config:
         "spawn_mode": "saved",   # "saved", "random", "portal"
         "random_spawn_range": 500,
         "camera_mode": 0,
-        "rotate_only_horizontal": True
+        "rotate_only_horizontal": True,
+        "show_fps": False,
+        "draw_fog": False
     }
 
     @classmethod
@@ -37,13 +41,11 @@ class Config:
                 merged = cls.defaults.copy()
                 merged.update(data)
                 return merged
-            except Exception as e:
-                print(f"Error loading config: {e}")
-                # fallback: create default file
+            except Exception as e: # fallback: create default file
+                logging.error(f"Error loading config: {e}")
                 cls.save(cls.defaults)
                 return cls.defaults.copy()
-        else:
-            # Config file missing – create it with defaults
+        else: # Config file missing – create it with defaults
             cls.save(cls.defaults)
             return cls.defaults.copy()
 
@@ -53,4 +55,4 @@ class Config:
             with open(cls.CONFIG_FILE, 'w') as f:
                 json.dump(settings, f, indent=4)
         except Exception as e:
-            print(f"Error saving config: {e}")
+            logging.error(f"Error saving config: {e}")

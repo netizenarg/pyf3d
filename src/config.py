@@ -2,6 +2,53 @@ import logging
 import json
 import os
 
+DEFAULT_LOG_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        },
+        "simple": {
+            "format": "%(levelname)s: %(message)s"
+        }
+    },
+    "handlers": {
+        "console_stdout": {
+            "class": "logging.StreamHandler",
+            "level": "DEBUG",
+            "formatter": "simple",
+            "stream": "ext://sys.stdout",
+            "filters": ["level_filter_stdout"]
+        },
+        "console_stderr": {
+            "class": "logging.StreamHandler",
+            "level": "WARNING",
+            "formatter": "default",
+            "stream": "ext://sys.stderr"
+        },
+        "file": {
+            "class": "logging.handlers.TimedRotatingFileHandler",
+            "level": "DEBUG",
+            "formatter": "default",
+            "filename": "logs/pyf3d.log",
+            "when": "D",
+            "interval": 1,
+            "backupCount": 31,
+            "encoding": "utf8"
+        }
+    },
+    "filters": {
+        "level_filter_stdout": {
+            "()": "logger.LevelFilter",
+            "max_level": "WARNING"
+        }
+    },
+    "root": {
+        "level": "DEBUG",
+        "handlers": ["console_stdout", "console_stderr", "file"]
+    }
+}
 
 class Config:
     CONFIG_FILE = "config.json"
@@ -26,9 +73,10 @@ class Config:
         "spawn_mode": "saved",   # "saved", "random", "portal"
         "random_spawn_range": 500,
         "camera_mode": 0,
-        "rotate_only_horizontal": True,
+        "rotate_only_horizontal": False,
         "show_fps": False,
-        "draw_fog": False
+        "draw_fog": False,
+        "log_config": DEFAULT_LOG_CONFIG
     }
 
     @classmethod

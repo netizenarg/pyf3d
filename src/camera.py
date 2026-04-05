@@ -1,4 +1,5 @@
 import glfw
+import logging
 import math
 import numpy
 import random
@@ -10,7 +11,7 @@ def get_height(x, z):
             0.2 * math.sin((x * 0.6 + z * 0.4) * 0.8)) * 2.0 + 0.5
 
 class Camera:
-    def __init__(self, player=None, yaw=0, mouse_sensitivity=0.002, movement_speed=10.0, rotate_only_horizontal=True, mode=0):
+    def __init__(self, player=None, yaw=0, mouse_sensitivity=0.002, movement_speed=10.0, rotate_only_horizontal=False, mode=0):
         self.mode = mode  # 0 = first‑person, 1 = third‑person
         self.player = player
         self.position = numpy.array([self.player.position[0], self.player.position[1], self.player.position[2]])
@@ -36,6 +37,7 @@ class Camera:
             self.rotate_only_horizontal = False
         elif self.rotate_only_horizontal != self.rotate_only_horizontal_default:
             self.rotate_only_horizontal = self.rotate_only_horizontal_default
+        logging.debug(f'Camera.set_mode(mode={self.mode}); rotate_only_horizontal={self.rotate_only_horizontal}')
 
     def update_vectors(self):
         front = numpy.array([

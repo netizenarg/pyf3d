@@ -73,7 +73,6 @@ class Config:
         "spawn_mode": "saved",   # "saved", "random", "portal"
         "random_spawn_range": 500,
         "camera_mode": 0,
-        "rotate_only_horizontal": False,
         "show_fps": False,
         "draw_fog": False,
         "log_config": DEFAULT_LOG_CONFIG

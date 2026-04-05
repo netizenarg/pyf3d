@@ -73,10 +73,12 @@ class StatsPanel:
         # Data
         self.position = (0, 0, 0)
         self.speed = 0.0
+        self.level = 0
         self.life = 100
         self.mana = 100
         self.weapon_name = "Rifle"
         self.ammo_count = 100
+        self.killed_mobs = 0
         self.familiar_name = ""
 
         # Table content – 3 rows x 4 columns
@@ -113,7 +115,7 @@ class StatsPanel:
         self.width = width
         self.height = height
 
-    def update(self, position, speed, life, mana, weapon_name, ammo_count, familiar_name):
+    def update(self, position, speed=10.0, level=0, life=100, mana=100, weapon_name='', ammo_count=0, killed_mobs=0, familiar_name=''):
         self.position = position
         self.speed = speed
         self.life = life
@@ -121,22 +123,22 @@ class StatsPanel:
         self.weapon_name = weapon_name
         self.ammo_count = ammo_count
         self.familiar_name = familiar_name
+        self.level = level
+        self.killed_mobs = killed_mobs
 
-        # Build table content
-        # Row 0: Pos, Speed, Life, Mana
-        self.cells[0][0] = f"Pos: ({position[0]:.1f}, {position[1]:.1f}, {position[2]:.1f})"
-        self.cells[0][1] = f"Speed: {speed:.1f}"
-        self.cells[0][2] = f"Life: {life:d}%"
-        self.cells[0][3] = f"Mana: {mana:d}%"
+        # Build table content (existing rows)
+        self.cells[0][0] = f"Level: {level}"
+        self.cells[0][1] = f"Pos: ({position[0]:.1f}, {position[1]:.1f}, {position[2]:.1f})"
+        self.cells[0][2] = f"Speed: {speed:.1f}"
+        self.cells[0][3] = f"Life: {life}%"
 
-        # Row 1: Weapon (value only), Ammo, Familiar (value only), empty
-        self.cells[1][0] = weapon_name          # no label for strings
-        self.cells[1][1] = f"Ammo: {ammo_count:d}"
-        self.cells[1][2] = familiar_name
-        self.cells[1][3] = ""
+        self.cells[1][0] = f"Mana: {mana}%"
+        self.cells[1][1] = weapon_name
+        self.cells[1][2] = f"Ammo: {ammo_count}"
+        self.cells[1][3] = f"Kills: {killed_mobs}"
 
-        # Row 2: empty for now (can be used for extra stats)
-        self.cells[2][0] = ""
+        # Row 2: Level and Killed Mobs
+        self.cells[2][0] = familiar_name
         self.cells[2][1] = ""
         self.cells[2][2] = ""
         self.cells[2][3] = ""
@@ -154,6 +156,9 @@ class StatsPanel:
         for row in range(self.rows):
             for col in range(self.cols):
                 text = self.cells[row][col]
+                if text is None: continue
+                text = str(text)
+                if not text: continue
                 width = len(text) * self.char_size
                 if width > col_widths[col]:
                     col_widths[col] = width
@@ -190,6 +195,8 @@ class StatsPanel:
             x = start_x
             for col in range(self.cols):
                 text = self.cells[row][col]
+                if text is None: text = ''
+                text = str(text)
                 if text:
                     y_center = y + self.row_height // 2 - self.char_size // 2
                     self._draw_text(text, x + self.cell_padding, y_center, self.char_size, uppercase=True)

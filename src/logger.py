@@ -3,13 +3,6 @@ import logging
 import logging.config
 import os
 
-# # default log to console stream
-# from sys import stderr, stdout
-# logger = logging.getLogger()
-# logger.setLevel(logging.DEBUG)
-# logger.addHandler(logging.StreamHandler(stderr))
-# logger.addHandler(logging.StreamHandler(stdout))
-
 
 class LevelFilter(logging.Filter):
     def __init__(self, max_level):

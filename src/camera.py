@@ -11,7 +11,7 @@ def get_height(x, z):
             0.2 * math.sin((x * 0.6 + z * 0.4) * 0.8)) * 2.0 + 0.5
 
 class Camera:
-    def __init__(self, player=None, yaw=0, mouse_sensitivity=0.002, movement_speed=10.0, rotate_only_horizontal=False, mode=0):
+    def __init__(self, player=None, yaw=0, mouse_sensitivity=0.002, movement_speed=10.0, mode=0):
         self.mode = mode  # 0 = first‑person, 1 = third‑person
         self.player = player
         self.position = numpy.array([self.player.position[0], self.player.position[1], self.player.position[2]])
@@ -19,7 +19,7 @@ class Camera:
         self.pitch = 0.0
         self.distance = 9.0 # Third‑person distance from player
         self.height_offset = 5.0 # Vertical offset above the orbit point
-        self.rotate_only_horizontal = self.rotate_only_horizontal_default = rotate_only_horizontal
+        self.rotate_only_horizontal = True if self.player.level < 2 else False
         if self.mode == 1:
             self.pitch = 20.0
             self.rotate_only_horizontal = False
@@ -31,13 +31,8 @@ class Camera:
         self.update_vectors()
         self.adjust_height()
 
-    def set_mode(self, value=0):
-        self.mode = value
-        if self.mode == 1:
-            self.rotate_only_horizontal = False
-        elif self.rotate_only_horizontal != self.rotate_only_horizontal_default:
-            self.rotate_only_horizontal = self.rotate_only_horizontal_default
-        logging.debug(f'Camera.set_mode(mode={self.mode}); rotate_only_horizontal={self.rotate_only_horizontal}')
+    def change_rotation_horizontal(self, value):
+        self.rotate_only_horizontal = value
 
     def update_vectors(self):
         front = numpy.array([
@@ -46,10 +41,24 @@ class Camera:
             math.sin(math.radians(self.yaw)) * math.cos(math.radians(self.pitch))
         ])
         self.front = front / numpy.linalg.norm(front)
-        self.right = numpy.cross(self.front, self.up)
-        self.right /= numpy.linalg.norm(self.right)
+        world_up = numpy.array([0.0, 1.0, 0.0])
+        self.right = numpy.cross(self.front, world_up)
+        if numpy.linalg.norm(self.right) < 0.001:
+            self.right = numpy.array([1.0, 0.0, 0.0])
+        else:
+            self.right /= numpy.linalg.norm(self.right)
         self.up = numpy.cross(self.right, self.front)
         self.up /= numpy.linalg.norm(self.up)
+
+    def set_mode(self, value=0):
+        self.mode = value
+        if self.mode == 1:
+            self.rotate_only_horizontal = False
+        else:
+            self.rotate_only_horizontal = True if self.player.level < 2 else False
+            self.pitch = 0.0
+            self.up = numpy.array([0.0, 1.0, 0.0])
+        self.update_vectors()
 
     def adjust_height(self):
         ground_y = get_height(self.position[0], self.position[2])
@@ -72,6 +81,8 @@ class Camera:
                     self.pitch = 89.0
                 if self.pitch < -89.0:
                     self.pitch = -89.0
+        if self.rotate_only_horizontal:
+            self.pitch = 0.0
         self.update_vectors()
 
     def process_keyboard(self, keys, dt, forward=None):

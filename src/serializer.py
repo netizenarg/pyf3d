@@ -1,9 +1,14 @@
 import numpy
+import re
 import sqlite3
+
+from logger import logging
 
 
 class Serializer:
     def __init__(self, db_path):
+        # Allowed tables – add more as needed
+        self.allowed_tables = {'player', 'chunks', 'healthes', 'mobs'}
         self.db_path = db_path
         self._init_db()
 
@@ -12,21 +17,23 @@ class Serializer:
             cursor = conn.cursor()
             # Player stats table
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS player_stats (
+                CREATE TABLE IF NOT EXISTS player (
                     id INTEGER PRIMARY KEY,
                     pos_x REAL,
                     pos_y REAL,
                     pos_z REAL,
+                    portal_x REAL,
+                    portal_y REAL,
+                    portal_z REAL,
+                    height REAL,
                     speed REAL,
+                    level INTEGER,
                     life INTEGER,
                     mana INTEGER,
                     weapon_name TEXT,
                     ammo_count INTEGER,
-                    familiar_name TEXT,
-                    portal_x REAL,
-                    portal_y REAL,
-                    portal_z REAL,
-                    height REAL
+                    killed_mobs INTEGER,
+                    familiar_name TEXT
                 )
             ''')
             # table for chunks
@@ -59,30 +66,67 @@ class Serializer:
             ''')
             conn.commit()
 
+    def update(self, table, fields, values, where="id = 1"):
+        """
+        Generic update for any table.
+        - table: string, table name (must be in allowed list)
+        - fields: tuple/list of column names
+        - values: tuple/list of corresponding values
+        - where: optional WHERE clause (default "id = 1")
+        """
+        if table not in self.allowed_tables:
+            logging.error(f"Table '{table}' not allowed for update")
+        if len(fields) != len(values):
+            logging.error("Fields and values length mismatch")
+        for col in fields: # Sanitize column names – only alphanumeric + underscore
+            if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', col):
+                logging.error(f"Invalid column name: {col}")
+        # Build SET clause safely
+        set_clause = ", ".join(f"{col} = ?" for col in fields)
+        query = f"UPDATE {table} SET {set_clause} WHERE {where}"
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, values)
+            conn.commit()
+
     def save_player(self, player_data):
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT OR REPLACE INTO player_stats
-                (id, pos_x, pos_y, pos_z, speed, life, mana,
-                weapon_name, ammo_count, familiar_name, portal_x, portal_y, portal_z, height)
-                VALUES (1, :pos_x, :pos_y, :pos_z, :speed, :life,
-                        :mana, :weapon_name, :ammo_count, :familiar_name,
-                        :portal_x, :portal_y, :portal_z, :height)
+                INSERT OR REPLACE INTO player
+                (id, pos_x, pos_y, pos_z, portal_x, portal_y, portal_z,
+                height, speed, level, life, mana, weapon_name,
+                ammo_count, killed_mobs, familiar_name)
+                VALUES (1, :pos_x, :pos_y, :pos_z,
+                        :portal_x, :portal_y, :portal_z,
+                        :height, :speed, :level, :life, :mana,
+                        :weapon_name, :ammo_count, :killed_mobs,
+                        :familiar_name)
             ''', player_data)
 
     def load_player(self):
         with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            cursor.execute('SELECT * FROM player_stats WHERE id = 1')
+            cursor.execute('SELECT * FROM player WHERE id = 1')
             row = cursor.fetchone()
             if row:
                 return {
-                    'pos_x': row[1], 'pos_y': row[2], 'pos_z': row[3],
-                    'speed': row[4], 'life': row[5], 'mana': row[6],
-                    'weapon_name': row[7], 'ammo_count': row[8], 'familiar_name': row[9],
-                    'portal_x': row[10], 'portal_y': row[11], 'portal_z': row[12],
-                    'height': row[13]
+                    'pos_x': row['pos_x'],
+                    'pos_y': row['pos_y'],
+                    'pos_z': row['pos_z'],
+                    'portal_x': row['portal_x'],
+                    'portal_y': row['portal_y'],
+                    'portal_z': row['portal_z'],
+                    'height': row['height'],
+                    'speed': row['speed'],
+                    'level': row['level'],
+                    'life': row['life'],
+                    'mana': row['mana'],
+                    'weapon_name': row['weapon_name'],
+                    'ammo_count': row['ammo_count'],
+                    'killed_mobs': row['killed_mobs'],
+                    'familiar_name': row['familiar_name']
                 }
             return None
 

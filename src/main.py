@@ -12,7 +12,7 @@ class Screen:
         return self.width / self.height
 screen = Screen()
 
-from logger import setup_logging
+from logger import logging, setup_logging
 
 import glfw
 from OpenGL.GL import *
@@ -77,13 +77,10 @@ def main():
     spawn_mode = config.get("spawn_mode", "saved")
     random_range = config.get("random_spawn_range", 500)
     camera_mode = config.get("camera_mode", 0)
-    rotate_only_horizontal = config.get("rotate_only_horizontal", False)
     draw_fog = config.get("draw_fog", False)
     fog_color = numpy.array([0.1, 0.2, 0.3])
-    #fog_start = (chunk_size - 1) * load_radius
-    #fog_end = fog_start + 40.0
     # Compute physical distance to furthest loaded chunk corner
-    max_visible_dist = (chunk_size - 1) * (load_radius + 0.5)  # e.g., 15 * 1.5 = 22.5
+    max_visible_dist = (chunk_size - 1) * (load_radius + 0.5)
     fog_start = max_visible_dist * 0.6   # 13.5
     fog_end = max_visible_dist * 0.9     # 20.25
 
@@ -123,8 +120,11 @@ def main():
 
     camera = Camera(player=player, mode=camera_mode,
                     mouse_sensitivity=mouse_sensitivity,
-                    movement_speed=movement_speed,
-                    rotate_only_horizontal=rotate_only_horizontal)
+                    movement_speed=movement_speed)
+
+    def change_rotation_handler(value):
+        camera.rotate_only_horizontal = value
+    player.change_rotation_handler = change_rotation_handler
 
     chunk_manager = ChunkManager(
         chunk_size=chunk_size,
@@ -319,7 +319,8 @@ def main():
                     continue
                 dist = numpy.linalg.norm(mob.position - ammo.position)
                 if dist < 0.5 + 0.5:  # ammo radius 0.5, mob radius 0.5
-                    mob.take_damage(ammo.damage)
+                    if mob.take_damage(ammo.damage): # check mob is died
+                        player.add_kill()
                     mob_manager.add_particles(ammo.position, count=12)
                     ammo.active = False
                     break
@@ -330,10 +331,12 @@ def main():
             stats_panel.update(
                 position=player.position,
                 speed=player.speed,
+                level=player.level,
                 life=player.life,
                 mana=player.mana,
                 weapon_name=player.weapon_name,
                 ammo_count=player.ammo_count,
+                killed_mobs=player.killed_mobs,
                 familiar_name=player.familiar_name
             )
 

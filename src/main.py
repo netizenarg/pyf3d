@@ -12,6 +12,8 @@ class Screen:
         return self.width / self.height
 screen = Screen()
 
+from logger import setup_logging
+
 import glfw
 from OpenGL.GL import *
 import numpy
@@ -54,6 +56,9 @@ def compute_projection(width, height):
 
 def main():
     config = Config.load()
+
+    setup_logging(config.get('log_config', {}))
+
     db_path = config.get("db_path", "data.db")
     mouse_sensitivity = config["mouse_sensitivity"]
     movement_speed = config["movement_speed"]
@@ -72,7 +77,7 @@ def main():
     spawn_mode = config.get("spawn_mode", "saved")
     random_range = config.get("random_spawn_range", 500)
     camera_mode = config.get("camera_mode", 0)
-    rotate_only_horizontal = config.get("rotate_only_horizontal", True)
+    rotate_only_horizontal = config.get("rotate_only_horizontal", False)
     draw_fog = config.get("draw_fog", False)
     fog_color = numpy.array([0.1, 0.2, 0.3])
     #fog_start = (chunk_size - 1) * load_radius
@@ -307,19 +312,16 @@ def main():
             if not ammo.active:
                 ammo_list.remove(ammo)
                 continue
-            # Check collision with mobs
-            center, radius = ammo.get_collision_sphere()
-            for mobs in mob_manager.active_mobs.values():
-                for mob in mobs:
-                    if not mob.is_alive():
-                        continue
-                    dist = numpy.linalg.norm(mob.position - center)
-                    if dist < radius + 0.5:  # mob radius ~0.5
-                        mob.take_damage(ammo.damage)
-                        mob_manager.add_particles(ammo.position, count=12)
-                        ammo.active = False
-                        break
-                if not ammo.active:
+            # Use spatial grid for collision
+            nearby_mobs = mob_manager.get_nearby_mobs(ammo.position, ammo.range + 0.5)
+            for mob in nearby_mobs:
+                if not mob.is_alive():
+                    continue
+                dist = numpy.linalg.norm(mob.position - ammo.position)
+                if dist < 0.5 + 0.5:  # ammo radius 0.5, mob radius 0.5
+                    mob.take_damage(ammo.damage)
+                    mob_manager.add_particles(ammo.position, count=12)
+                    ammo.active = False
                     break
 
         player.speed = numpy.linalg.norm(numpy.array(player.position) - prev_player_pos) / dt if dt > 0 else 0.0

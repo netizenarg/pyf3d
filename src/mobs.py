@@ -45,8 +45,8 @@ class Particle:
 
 
 class Mob:
-    def __init__(self, position, chunk_cx, chunk_cz, speed=2.5, follow_range=15.0,
-                 attack_range=2.0, damage=10, npc_type="basic"):
+    def __init__(self, position, chunk_cx, chunk_cz, speed=1.5, follow_range=8.0,
+                 attack_range=2.0, damage=5, npc_type="basic"):
         self.position = numpy.array(position, dtype=float)
         self.chunk_cx = chunk_cx
         self.chunk_cz = chunk_cz
@@ -63,7 +63,8 @@ class Mob:
         dx = player_pos[0] - self.position[0]
         dz = player_pos[2] - self.position[2]
         dist_sq = dx*dx + dz*dz
-        if dist_sq < self.follow_range * self.follow_range and dist_sq > 0.01:
+        # Only move if within follow_range * 1.5
+        if dist_sq < (self.follow_range * 1.5) ** 2 and dist_sq > 0.01:
             dist = math.sqrt(dist_sq)
             move = numpy.array([dx / dist, 0.0, dz / dist]) * self.speed * dt
             new_pos = self.position + move
@@ -116,77 +117,202 @@ class Mob:
 
 
 class MobModel:
-    # ... (unchanged, same as before) ...
     def __init__(self, shader: Shader):
         self.shader = shader
-        self.vao = glGenVertexArrays(1)
-        self.vbo = glGenBuffers(1)
-        self.ebo = glGenBuffers(1)
-        self._build_cube_buffers()
-        self._setup_buffers()
+        # Build low‑poly sphere and pyramid VAOs (once)
+        self.sphere_vao, self.sphere_index_count = self._build_sphere(radius=0.5, stacks=6, slices=8)
+        self.pyramid_vao, self.pyramid_index_count = self._build_pyramid()
+        # Simple cube VAO for distant mobs (LOD)
+        self.cube_vao, self.cube_index_count = self._build_cube()
 
-    def _build_cube_buffers(self):
-        vertices = numpy.array([
-            -0.5, -0.5,  0.5,  0, 0, 1,
-             0.5, -0.5,  0.5,  0, 0, 1,
-             0.5,  0.5,  0.5,  0, 0, 1,
-            -0.5,  0.5,  0.5,  0, 0, 1,
-            -0.5, -0.5, -0.5,  0, 0, -1,
-             0.5, -0.5, -0.5,  0, 0, -1,
-             0.5,  0.5, -0.5,  0, 0, -1,
-            -0.5,  0.5, -0.5,  0, 0, -1,
-            -0.5, -0.5, -0.5, -1, 0, 0,
-            -0.5, -0.5,  0.5, -1, 0, 0,
-            -0.5,  0.5,  0.5, -1, 0, 0,
-            -0.5,  0.5, -0.5, -1, 0, 0,
-             0.5, -0.5, -0.5,  1, 0, 0,
-             0.5, -0.5,  0.5,  1, 0, 0,
-             0.5,  0.5,  0.5,  1, 0, 0,
-             0.5,  0.5, -0.5,  1, 0, 0,
-            -0.5,  0.5, -0.5,  0, 1, 0,
-             0.5,  0.5, -0.5,  0, 1, 0,
-             0.5,  0.5,  0.5,  0, 1, 0,
-            -0.5,  0.5,  0.5,  0, 1, 0,
-            -0.5, -0.5, -0.5,  0, -1, 0,
-             0.5, -0.5, -0.5,  0, -1, 0,
-             0.5, -0.5,  0.5,  0, -1, 0,
-            -0.5, -0.5,  0.5,  0, -1, 0,
-        ], dtype=numpy.float32)
-        indices = numpy.array([
-            0,1,2, 0,2,3, 4,5,6, 4,6,7, 8,9,10, 8,10,11,
-            12,13,14, 12,14,15, 16,17,18, 16,18,19, 20,21,22, 20,22,23
-        ], dtype=numpy.uint32)
-        self.vertex_data = vertices
-        self.index_data = indices
-        self.index_count = len(indices)
-
-    def _setup_buffers(self):
-        glBindVertexArray(self.vao)
-        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
-        glBufferData(GL_ARRAY_BUFFER, self.vertex_data.nbytes, self.vertex_data, GL_STATIC_DRAW)
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.ebo)
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, self.index_data.nbytes, self.index_data, GL_STATIC_DRAW)
+    def _build_sphere(self, radius, stacks, slices):
+        """Low‑poly UV sphere with normals."""
+        vertices = []
+        indices = []
+        for i in range(stacks + 1):
+            theta = math.pi * i / stacks
+            sin_theta = math.sin(theta)
+            cos_theta = math.cos(theta)
+            for j in range(slices + 1):
+                phi = 2 * math.pi * j / slices
+                x = radius * sin_theta * math.cos(phi)
+                y = radius * cos_theta
+                z = radius * sin_theta * math.sin(phi)
+                nx, ny, nz = x / radius, y / radius, z / radius
+                vertices.extend([x, y, z, nx, ny, nz])
+        for i in range(stacks):
+            for j in range(slices):
+                first = i * (slices + 1) + j
+                second = first + slices + 1
+                indices.extend([first, second, first+1, second, second+1, first+1])
+        vertices = numpy.array(vertices, dtype=numpy.float32)
+        indices = numpy.array(indices, dtype=numpy.uint32)
+        vao, vbo, ebo = glGenVertexArrays(1), glGenBuffers(1), glGenBuffers(1)
+        glBindVertexArray(vao)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices, GL_STATIC_DRAW)
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*4, ctypes.c_void_p(0))
         glEnableVertexAttribArray(0)
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*4, ctypes.c_void_p(3*4))
         glEnableVertexAttribArray(1)
         glBindVertexArray(0)
+        return vao, len(indices)
 
-    def draw(self, mob, view, projection, light_dir, light_intensity):
+    def _build_pyramid(self):
+        """Square‑based pyramid (apex at +Y) – unchanged."""
+        v = [
+            -0.5, 0.0, -0.5,  0.0, -1.0, 0.0,
+             0.5, 0.0, -0.5,  0.0, -1.0, 0.0,
+             0.5, 0.0,  0.5,  0.0, -1.0, 0.0,
+            -0.5, 0.0,  0.5,  0.0, -1.0, 0.0,
+             0.0, 0.5,  0.0,  0.0,  1.0, 0.0,
+        ]
+        indices = [
+            0,1,4, 1,2,4, 2,3,4, 3,0,4,
+            0,2,1, 0,3,2
+        ]
+        vertices = numpy.array(v, dtype=numpy.float32)
+        indices = numpy.array(indices, dtype=numpy.uint32)
+        vao, vbo, ebo = glGenVertexArrays(1), glGenBuffers(1), glGenBuffers(1)
+        glBindVertexArray(vao)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices, GL_STATIC_DRAW)
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*4, ctypes.c_void_p(0))
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*4, ctypes.c_void_p(3*4))
+        glEnableVertexAttribArray(1)
+        glBindVertexArray(0)
+        return vao, len(indices)
+
+    def _build_cube(self):
+        """Simple cube for distant LOD."""
+        vertices = numpy.array([
+            -0.5,-0.5, 0.5,  0,0,1,
+             0.5,-0.5, 0.5,  0,0,1,
+             0.5, 0.5, 0.5,  0,0,1,
+            -0.5, 0.5, 0.5,  0,0,1,
+            -0.5,-0.5,-0.5,  0,0,-1,
+             0.5,-0.5,-0.5,  0,0,-1,
+             0.5, 0.5,-0.5,  0,0,-1,
+            -0.5, 0.5,-0.5,  0,0,-1,
+            -0.5,-0.5,-0.5, -1,0,0,
+            -0.5,-0.5, 0.5, -1,0,0,
+            -0.5, 0.5, 0.5, -1,0,0,
+            -0.5, 0.5,-0.5, -1,0,0,
+             0.5,-0.5,-0.5,  1,0,0,
+             0.5,-0.5, 0.5,  1,0,0,
+             0.5, 0.5, 0.5,  1,0,0,
+             0.5, 0.5,-0.5,  1,0,0,
+            -0.5, 0.5,-0.5,  0,1,0,
+             0.5, 0.5,-0.5,  0,1,0,
+             0.5, 0.5, 0.5,  0,1,0,
+            -0.5, 0.5, 0.5,  0,1,0,
+            -0.5,-0.5,-0.5,  0,-1,0,
+             0.5,-0.5,-0.5,  0,-1,0,
+             0.5,-0.5, 0.5,  0,-1,0,
+            -0.5,-0.5, 0.5,  0,-1,0,
+        ], dtype=numpy.float32)
+        indices = numpy.array([
+            0,1,2, 0,2,3, 4,5,6, 4,6,7, 8,9,10, 8,10,11,
+            12,13,14, 12,14,15, 16,17,18, 16,18,19, 20,21,22, 20,22,23
+        ], dtype=numpy.uint32)
+        vao, vbo, ebo = glGenVertexArrays(1), glGenBuffers(1), glGenBuffers(1)
+        glBindVertexArray(vao)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo)
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices, GL_STATIC_DRAW)
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*4, ctypes.c_void_p(0))
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*4, ctypes.c_void_p(3*4))
+        glEnableVertexAttribArray(1)
+        glBindVertexArray(0)
+        return vao, len(indices)
+
+    def draw(self, mob, view, projection, light_dir, light_intensity, camera_pos):
+        """Draw mob with LOD and frustum culling."""
+        # Frustum culling (simple sphere test)
+        center = mob.position
+        radius = 0.8  # approximate bounding sphere
+        # Get view frustum planes from view-projection matrix (simplified)
+        vp = projection @ view
+        # Test if sphere is in front of near plane (z < 0 in clip space)
+        # For simplicity, just check distance from camera
+        dist = numpy.linalg.norm(camera_pos - center)
+        if dist > 60:  # beyond draw distance
+            return
+
+        # LOD: use cube for distant mobs (>30 units)
+        use_cube = dist > 30.0
+
         glUseProgram(self.shader.program)
         self.shader.set_mat4("uView", view)
         self.shader.set_mat4("uProjection", projection)
         self.shader.set_vec3("uLightDir", light_dir)
         self.shader.set_float("uLightIntensity", light_intensity)
-        model = numpy.eye(4, dtype=numpy.float32)
-        model[0, 3] = mob.position[0]
-        model[1, 3] = mob.position[1]
-        model[2, 3] = mob.position[2]
-        scale = 0.6
-        model[0,0] = model[1,1] = model[2,2] = scale
-        self.shader.set_mat4("uModel", model)
-        glBindVertexArray(self.vao)
-        glDrawElements(GL_TRIANGLES, self.index_count, GL_UNSIGNED_INT, None)
+
+        def build_model(pos, scale, rot_deg=0.0):
+            mat = numpy.eye(4, dtype=numpy.float32)
+            mat[0,3], mat[1,3], mat[2,3] = pos
+            mat[0,0], mat[1,1], mat[2,2] = scale
+            if rot_deg != 0.0:
+                rad = math.radians(rot_deg)
+                c, s = math.cos(rad), math.sin(rad)
+                rot = numpy.array([
+                    [c, 0, s, 0],
+                    [0, 1, 0, 0],
+                    [-s, 0, c, 0],
+                    [0, 0, 0, 1]
+                ], dtype=numpy.float32)
+                mat = rot @ mat
+            return mat
+
+        if use_cube:
+            glBindVertexArray(self.cube_vao)
+            self.current_index_count = self.cube_index_count
+            # Draw a single cube (body only) for distant mobs
+            body_pos = mob.position + numpy.array([0.0, 0.3, 0.0])
+            self.shader.set_mat4("uModel", build_model(body_pos, (0.8, 0.8, 0.8)))
+            glDrawElements(GL_TRIANGLES, self.current_index_count, GL_UNSIGNED_INT, None)
+        else:
+            # Full detail: sphere for body/head/legs, pyramid for nose/tail
+            glBindVertexArray(self.sphere_vao)
+            self.current_index_count = self.sphere_index_count
+
+            # Body
+            body_pos = mob.position + numpy.array([0.0, 0.2, 0.0])
+            self.shader.set_mat4("uModel", build_model(body_pos, (0.8, 0.6, 0.8)))
+            glDrawElements(GL_TRIANGLES, self.current_index_count, GL_UNSIGNED_INT, None)
+
+            # Head
+            head_pos = mob.position + numpy.array([0.0, 0.5, 0.5])
+            self.shader.set_mat4("uModel", build_model(head_pos, (0.5, 0.5, 0.5)))
+            glDrawElements(GL_TRIANGLES, self.current_index_count, GL_UNSIGNED_INT, None)
+
+            # Legs (4 ellipsoids)
+            leg_scale = (0.3, 0.2, 0.3)
+            leg_offsets = [(-0.4, 0.0, -0.5), (0.4, 0.0, -0.5), (-0.4, 0.0, 0.5), (0.4, 0.0, 0.5)]
+            for off in leg_offsets:
+                leg_pos = mob.position + numpy.array([off[0], 0.0, off[2]])
+                self.shader.set_mat4("uModel", build_model(leg_pos, leg_scale))
+                glDrawElements(GL_TRIANGLES, self.current_index_count, GL_UNSIGNED_INT, None)
+
+            # Nose (pyramid)
+            glBindVertexArray(self.pyramid_vao)
+            self.current_index_count = self.pyramid_index_count
+            nose_pos = mob.position + numpy.array([0.0, 0.5, 0.85])
+            self.shader.set_mat4("uModel", build_model(nose_pos, (0.2, 0.2, 0.3)))
+            glDrawElements(GL_TRIANGLES, self.current_index_count, GL_UNSIGNED_INT, None)
+
+            # Tail (pyramid)
+            tail_pos = mob.position + numpy.array([0.0, 0.2, -0.7])
+            self.shader.set_mat4("uModel", build_model(tail_pos, (0.2, 0.15, 0.4), rot_deg=180))
+            glDrawElements(GL_TRIANGLES, self.current_index_count, GL_UNSIGNED_INT, None)
+
         glBindVertexArray(0)
 
 
@@ -257,7 +383,7 @@ class MobManager:
         world_min_z = cz * self.phys_size
         world_max_x = world_min_x + self.phys_size
         world_max_z = world_min_z + self.phys_size
-        count = random.randint(1, 2)
+        count = random.randint(0, 1)
         mobs = []
         for _ in range(count):
             x = random.uniform(world_min_x, world_max_x)
@@ -282,11 +408,39 @@ class MobManager:
         else:
             return self._generate_mobs_for_chunk(cx, cz)
 
+    def _update_spatial_grid(self):
+        """Rebuild grid based on current mob positions (called each frame)."""
+        self.grid = {}
+        cell_size = 10.0  # 10 units per cell
+        for mobs in self.active_mobs.values():
+            for mob in mobs:
+                if not mob.is_alive():
+                    continue
+                cx = int(mob.position[0] // cell_size)
+                cz = int(mob.position[2] // cell_size)
+                key = (cx, cz)
+                self.grid.setdefault(key, []).append(mob)
+
+    def get_nearby_mobs(self, center, radius):
+        """Return mobs within a radius using grid lookup."""
+        cell_size = 10.0
+        min_cx = int((center[0] - radius) // cell_size)
+        max_cx = int((center[0] + radius) // cell_size)
+        min_cz = int((center[2] - radius) // cell_size)
+        max_cz = int((center[2] + radius) // cell_size)
+        nearby = []
+        for cx in range(min_cx, max_cx + 1):
+            for cz in range(min_cz, max_cz + 1):
+                mobs = self.grid.get((cx, cz), [])
+                for mob in mobs:
+                    if numpy.linalg.norm(mob.position - center) <= radius:
+                        nearby.append(mob)
+        return nearby
+
     def update(self, dt):
         # Remove dead mobs
         for chunk_key, mobs in list(self.active_mobs.items()):
             self.active_mobs[chunk_key] = [m for m in mobs if m.is_alive()]
-
         current_chunks = set(self.chunk_manager.chunks.keys())
         # Unload
         for chunk_key in list(self.loaded_chunks):
@@ -300,8 +454,20 @@ class MobManager:
                 mobs = self._load_mobs_for_chunk(chunk_key[0], chunk_key[1])
                 self.active_mobs[chunk_key] = mobs
                 self.loaded_chunks.add(chunk_key)
-
         player_pos = numpy.array(self.player.position)
+        # Cap total mobs to 30
+        total_mobs = sum(len(mobs) for mobs in self.active_mobs.values())
+        if total_mobs > 30:
+            # Remove excess mobs from the farthest chunks
+            chunks_sorted = sorted(self.active_mobs.items(), key=lambda x:
+                (x[0][0] - player_pos[0]//self.phys_size)**2 +
+                (x[0][1] - player_pos[2]//self.phys_size)**2, reverse=True)
+            for (cx, cz), mobs in chunks_sorted:
+                if total_mobs <= 30:
+                    break
+                removed = mobs[:total_mobs-30]
+                self.active_mobs[(cx, cz)] = mobs[len(removed):]
+                total_mobs = sum(len(m) for m in self.active_mobs.values())
         mobs_to_remove = []
         mobs_to_add = []
         for chunk_key, mobs in list(self.active_mobs.items()):
@@ -327,11 +493,11 @@ class MobManager:
         # Apply additions
         for new_key, mob in mobs_to_add:
             self.active_mobs.setdefault(new_key, []).append(mob)
-
         # Update particles
         self.particles = [p for p in self.particles if p.life > 0]
         for p in self.particles:
             p.life -= dt * 2.0
+        self._update_spatial_grid()
 
     def draw_health_bars(self, view, proj, screen_width, screen_height):
         """Call after 3D rendering, with depth test disabled."""
@@ -358,6 +524,8 @@ class MobManager:
         y_offset = 0.8
         for mobs in self.active_mobs.values():
             for mob in mobs:
+                if numpy.linalg.norm(self.player.position - mob.position) > 40:
+                    continue
                 # Project mob position
                 world_pos = mob.position + numpy.array([0.0, y_offset, 0.0])
                 screen_pos = world_to_screen(world_pos, view, proj, screen_width, screen_height)
@@ -379,7 +547,7 @@ class MobManager:
         # Draw mobs
         for mobs in self.active_mobs.values():
             for mob in mobs:
-                self.mob_model.draw(mob, view, projection, light_dir, light_intensity)
+                self.mob_model.draw(mob, view, projection, light_dir, light_intensity, self.player.position)
         if self.particles: # Draw particles (point sprites)
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)

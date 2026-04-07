@@ -1,10 +1,28 @@
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 
+from logger import logging
+
+
 class Shader:
+    # def __init__(self, vert_src, frag_src):
+    #     self.program = compileProgram(compileShader(vert_src, GL_VERTEX_SHADER),
+    #                                   compileShader(frag_src, GL_FRAGMENT_SHADER))
+
     def __init__(self, vert_src, frag_src):
-        self.program = compileProgram(compileShader(vert_src, GL_VERTEX_SHADER),
-                                      compileShader(frag_src, GL_FRAGMENT_SHADER))
+        try:
+            vert_shader = compileShader(vert_src, GL_VERTEX_SHADER)
+            frag_shader = compileShader(frag_src, GL_FRAGMENT_SHADER)
+            self.program = compileProgram(vert_shader, frag_shader)
+
+            # Check for linking errors
+            if not glGetProgramiv(self.program, GL_LINK_STATUS):
+                info_log = glGetProgramInfoLog(self.program)
+                logging.error(f"Shader linking error: {info_log}")
+
+        except Exception as e:
+            logging.error(f"Shader compilation error: {e}")
+            raise
 
     def use(self):
         glUseProgram(self.program)
@@ -24,3 +42,7 @@ class Shader:
     def set_float(self, name, val):
         loc = glGetUniformLocation(self.program, name)
         glUniform1f(loc, val)
+
+    def set_int(self, name, val):
+        loc = glGetUniformLocation(self.program, name)
+        glUniform1i(loc, val)

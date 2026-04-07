@@ -64,6 +64,15 @@ class Serializer:
                     PRIMARY KEY (cx, cz)
                 )
             ''')
+            # table for trees
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS trees (
+                    cx INTEGER,
+                    cz INTEGER,
+                    data BLOB,
+                    PRIMARY KEY (cx, cz)
+                )
+            ''')
             conn.commit()
 
     def update(self, table, fields, values, where="id = 1"):
@@ -203,6 +212,32 @@ class Serializer:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('SELECT data FROM healthes WHERE cx = ? AND cz = ?', (cx, cz))
+            row = cursor.fetchone()
+            if row:
+                return json.loads(row[0])
+            return None
+
+    def save_trees(self, cx, cz, trees_data):
+        """Save list of tree dictionaries for a chunk as JSON, or delete if None."""
+        import json
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            if trees_data is None:
+                cursor.execute('DELETE FROM trees WHERE cx = ? AND cz = ?', (cx, cz))
+            else:
+                json_str = json.dumps(trees_data)
+                cursor.execute('''
+                    INSERT OR REPLACE INTO trees (cx, cz, data)
+                    VALUES (?, ?, ?)
+                ''', (cx, cz, json_str))
+            conn.commit()
+
+    def load_trees(self, cx, cz):
+        """Load list of tree dictionaries for a chunk, or None if missing."""
+        import json
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT data FROM trees WHERE cx = ? AND cz = ?', (cx, cz))
             row = cursor.fetchone()
             if row:
                 return json.loads(row[0])

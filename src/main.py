@@ -40,6 +40,7 @@ from player_model import PlayerModel
 from health import HealthManager
 from mobs import get_aimed_mob, MobManager
 from weapon import Ammo, Weapon
+from trees import TreeManager
 
 
 def compute_projection(width, height):
@@ -155,6 +156,8 @@ def main():
 
     player_model = PlayerModel(shader_3d)
     player.set_model(player_model)
+
+    tree_manager = TreeManager(chunk_manager, chunk_size=chunk_size, spacing=terrain_spacing)
 
     targets = []
     for _ in range(TARGET_COUNT):
@@ -303,6 +306,7 @@ def main():
         chunk_manager.update(camera.position)
         health_manager.update(dt)
         mob_manager.update(dt)
+        tree_manager.update(camera.position)
         sky.update(dt)
         light_dir, light_intensity = sky.get_combined_light()
 
@@ -366,6 +370,7 @@ def main():
         chunk_manager.draw(shader_3d)
         health_manager.draw(view, proj, light_dir, light_intensity)
         mob_manager.draw(view, proj, light_dir, light_intensity, screen.width, screen.height)
+        tree_manager.draw(view, proj, light_dir, light_intensity, camera.position)
 
         for target in targets:
             target.draw(shader_3d, view, proj, light_dir)
@@ -404,10 +409,11 @@ def main():
         glfw.swap_buffers(window)
         glfw.poll_events()
 
+    chunk_manager.save_all_chunks()
     mob_manager.shutdown()
     health_manager.shutdown()
+    tree_manager.shutdown()
     chunk_manager.shutdown()
-    chunk_manager.save_all_chunks()
     player.save()
     glfw.terminate()
 

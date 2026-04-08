@@ -27,6 +27,7 @@ from shaders.terrain_shdr import VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHA
 
 from camera import get_height
 from config import Config
+from media.audio import Audio
 from gui import Menu
 from gui_stats import StatsPanel
 from gui_fps import FPSOverlay
@@ -85,6 +86,8 @@ def main():
     fog_start = max_visible_dist * 0.6   # 13.5
     fog_end = max_visible_dist * 0.9     # 20.25
 
+    audio = Audio()
+
     player = Player(db_path, height=player_height)
 
     if spawn_mode == "random":
@@ -125,6 +128,8 @@ def main():
 
     def change_rotation_handler(value):
         camera.rotate_only_horizontal = value
+        audio.play_random_thread(duration=1.0, volume=0.5, mode='sweep', min_freq=300, max_freq=1500)
+
     player.change_rotation_handler = change_rotation_handler
 
     chunk_manager = ChunkManager(
@@ -325,6 +330,7 @@ def main():
                 if dist < 0.5 + 0.5:  # ammo radius 0.5, mob radius 0.5
                     if mob.take_damage(ammo.damage): # check mob is died
                         player.add_kill()
+                        audio.play_random_thread(duration=0.5, volume=0.3, mode='noise')
                     mob_manager.add_particles(ammo.position, count=12)
                     ammo.active = False
                     break

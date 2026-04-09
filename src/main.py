@@ -331,6 +331,7 @@ def main():
                     if mob.take_damage(ammo.damage): # check mob is died
                         player.add_kill()
                         audio.play_random_thread(duration=0.5, volume=0.3, mode='noise')
+                        mob_manager.dismantle_mob(mob, ammo.position, 1.0)
                     mob_manager.add_particles(ammo.position, count=12)
                     ammo.active = False
                     break

@@ -2,6 +2,8 @@ import numpy
 import math
 import random
 import ctypes
+import logging
+
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 
@@ -42,6 +44,50 @@ class Particle:
     def __init__(self, position):
         self.position = numpy.array(position, dtype=float)
         self.life = 1.0
+
+
+class FlyingPart:
+    __slots__ = ('start_pos', 'target_pos', 'mesh_type', 'scale', 'lifetime', 'elapsed', 'position')
+    def __init__(self, pos, direction, mesh_type, scale, lifetime=2.0):
+        self.start_pos = numpy.array(pos, dtype=float)
+        self.position = self.start_pos.copy()
+        self.mesh_type = mesh_type
+        self.scale = scale
+        self.lifetime = lifetime
+        self.elapsed = 0.0
+
+        # Guard against zero direction
+        if numpy.linalg.norm(direction) < 0.01:
+            direction = numpy.array([1.0, 0.0, 0.0])
+        else:
+            direction = direction / numpy.linalg.norm(direction)
+
+        # Move at most 1.0 units (about the size of the part)
+        horiz_distance = min(1.0, max(scale[0], scale[2]) * 0.8)
+        horiz_offset = direction * horiz_distance
+        target_x = self.start_pos[0] + horiz_offset[0]
+        target_z = self.start_pos[2] + horiz_offset[2]
+        target_y = get_height(target_x, target_z) + 0.2   # rest on ground
+        self.target_pos = numpy.array([target_x, target_y, target_z])
+
+    def update(self, dt, terrain_func=get_height):
+        self.elapsed += dt
+        if self.elapsed >= self.lifetime:
+            return False
+        t = self.elapsed / self.lifetime
+        # Linear interpolation – smooth enough
+        self.position = self.start_pos + (self.target_pos - self.start_pos) * t
+        return True
+
+    def get_model_matrix(self):
+        mat = numpy.eye(4, dtype=numpy.float32)
+        mat[0, 3] = self.position[0]
+        mat[1, 3] = self.position[1]
+        mat[2, 3] = self.position[2]
+        mat[0, 0] = self.scale[0]
+        mat[1, 1] = self.scale[1]
+        mat[2, 2] = self.scale[2]
+        return mat
 
 
 class Mob:
@@ -331,6 +377,13 @@ class MobManager:
         # Mob model
         self.mob_model = MobModel(Shader(MOB_VERTEX_SHADER_SRC, MOB_FRAGMENT_SHADER_SRC))
 
+        # Expose VAOs for parts drawing
+        self.sphere_vao = self.mob_model.sphere_vao
+        self.sphere_index_count = self.mob_model.sphere_index_count
+        self.pyramid_vao = self.mob_model.pyramid_vao
+        self.pyramid_index_count = self.mob_model.pyramid_index_count
+        self.dead_parts = []          # list of FlyingPart objects
+
         # Particle system
         self.particles = []
         self.particle_shader = Shader(PARTICLE_AMMO_EXPLOSION_VERTEX_SHADER_SRC, PARTICLE_AMMO_EXPLOSION_FRAGMENT_SHADER_SRC)
@@ -421,6 +474,56 @@ class MobManager:
                 key = (cx, cz)
                 self.grid.setdefault(key, []).append(mob)
 
+    def update_dead_parts(self, dt):
+        """Update all flying parts, remove expired ones."""
+        self.dead_parts = [p for p in self.dead_parts if p.update(dt, get_height)]
+
+    def dismantle_mob(self, mob, impact_point, lifetime=2.0):
+        """Replace a dying mob with animated parts that slide sideways and drop to ground."""
+        # Remove mob from active_mobs
+        key = (mob.chunk_cx, mob.chunk_cz)
+        if key in self.active_mobs:
+            self.active_mobs[key] = [m for m in self.active_mobs[key] if m is not mob]
+
+        # Determine directions – safe against vertical alignment
+        to_player = self.player.position - mob.position
+        dist_to_player = numpy.linalg.norm(to_player)
+        if dist_to_player < 0.01:
+            forward = numpy.array([0.0, 0.0, 1.0])
+        else:
+            forward = to_player / dist_to_player
+
+        up = numpy.array([0.0, 1.0, 0.0])
+        right = numpy.cross(forward, up)
+        if numpy.linalg.norm(right) < 0.01:
+            right = numpy.array([1.0, 0.0, 0.0])
+        else:
+            right = right / numpy.linalg.norm(right)
+        left = -right
+        backward = -forward
+
+        def add_part(offset, direction, mesh_type, scale):
+            pos = mob.position + numpy.array(offset)
+            self.dead_parts.append(FlyingPart(pos, direction, mesh_type, scale, lifetime))
+
+        # Body – slides left
+        add_part((0.0, 0.2, 0.0), left, 'sphere', (0.8, 0.6, 0.8))
+        # Head – slides right
+        add_part((0.0, 0.5, 0.5), right, 'sphere', (0.5, 0.5, 0.5))
+        # Front legs – slide forward
+        front_leg_offsets = [(-0.4, 0.0, -0.5), (0.4, 0.0, -0.5)]
+        for off in front_leg_offsets:
+            add_part(off, forward, 'sphere', (0.3, 0.2, 0.3))
+        # Hind legs – slide backward
+        hind_leg_offsets = [(-0.4, 0.0, 0.5), (0.4, 0.0, 0.5)]
+        for off in hind_leg_offsets:
+            add_part(off, backward, 'sphere', (0.3, 0.2, 0.3))
+        # Tail – slides backward
+        add_part((0.0, 0.2, -0.7), backward, 'pyramid', (0.2, 0.15, 0.4))
+        #logging.debug(f"dismantle_mob added {len(self.dead_parts)} parts")
+
+        self.add_particles(impact_point, count=20)
+
     def get_nearby_mobs(self, center, radius):
         """Return mobs within a radius using grid lookup."""
         cell_size = 10.0
@@ -497,6 +600,7 @@ class MobManager:
         self.particles = [p for p in self.particles if p.life > 0]
         for p in self.particles:
             p.life -= dt * 2.0
+        self.update_dead_parts(dt)
         self._update_spatial_grid()
 
     def draw_health_bars(self, view, proj, screen_width, screen_height):
@@ -567,6 +671,23 @@ class MobManager:
             glBindVertexArray(0)
             glDisable(GL_PROGRAM_POINT_SIZE)
             glDisable(GL_BLEND)
+        #logging.debug(f"drawing {len(self.dead_parts)} dead parts")
+        if self.dead_parts:
+            self.mob_model.shader.use()
+            self.mob_model.shader.set_mat4("uView", view)
+            self.mob_model.shader.set_mat4("uProjection", projection)
+            self.mob_model.shader.set_vec3("uLightDir", light_dir)
+            self.mob_model.shader.set_float("uLightIntensity", light_intensity)
+            for part in self.dead_parts:
+                model = part.get_model_matrix()
+                self.mob_model.shader.set_mat4("uModel", model)
+                if part.mesh_type == 'sphere':
+                    glBindVertexArray(self.sphere_vao)
+                    glDrawElements(GL_TRIANGLES, self.sphere_index_count, GL_UNSIGNED_INT, None)
+                else:  # pyramid
+                    glBindVertexArray(self.pyramid_vao)
+                    glDrawElements(GL_TRIANGLES, self.pyramid_index_count, GL_UNSIGNED_INT, None)
+            glBindVertexArray(0)
         self.draw_health_bars(view, projection, screen_width, screen_height)
 
     def _draw_health_rect(self, x, y, w, h, screen_w, screen_h):

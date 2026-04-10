@@ -57,6 +57,26 @@ def compute_projection(width, height):
     return proj
 
 
+def generate_window_icon():
+    icon_size = 16
+    # Create a 2D list of RGBA values (each is [r, g, b, a])
+    pixels = [[[0, 0, 0, 0] for _ in range(icon_size)] for _ in range(icon_size)]
+
+    # Background: dark blue
+    for y in range(icon_size):
+        for x in range(icon_size):
+            pixels[y][x] = [30, 30, 80, 255]
+
+    # Draw a white symbol
+    for y in range(4, 13):
+        for x in range(4, 13):
+            if y == 4 or x == 4 or (y == 8 and x <= 10):
+                pixels[y][x] = [255, 255, 255, 255]
+
+    return (icon_size, icon_size, pixels)
+
+
+
 def main():
     config = Config.load()
 
@@ -119,6 +139,8 @@ def main():
     if not window:
         glfw.terminate()
         sys.exit("Failed to create window")
+    if glfw.get_platform() != glfw.PLATFORM_WAYLAND:
+        glfw.set_window_icon(window, 1, [generate_window_icon()])
 
     glfw.make_context_current(window)
     glViewport(0, 0, screen.width, screen.height)
@@ -205,8 +227,8 @@ def main():
 
     compass = Compass(screen.width, screen.height, camera, draw_compass, compass_scale)
     stats_panel = StatsPanel(screen.width, screen.height, draw_stats)
-    menu = Menu(screen.width, screen.height, config, camera)
     fps_overlay = FPSOverlay(screen.width, screen.height, config.get("show_fps", False))
+    menu = Menu(window, screen.width, screen.height, config, camera, player, stats_panel, fps_overlay, compass)
 
     def resize_callback(window, width, height):
         nonlocal proj

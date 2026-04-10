@@ -13,58 +13,182 @@ from font import FONT_BITMAPS
 if 81 in FONT_BITMAPS and len(FONT_BITMAPS[81]) < 8:
     FONT_BITMAPS[81] += [0x00] * (8 - len(FONT_BITMAPS[81]))
 
+
+class Widget:
+    """Base class for all interactive UI widgets."""
+    def __init__(self, x, y, w, h):
+        self.rect = (x, y, w, h)
+
+    def draw(self, menu):
+        raise NotImplementedError
+
+    def handle_mouse(self, x, y, menu):
+        return False
+
+
+class CheckBox(Widget):
+    def __init__(self, label, config_key, x, y, w, h, callback=None):
+        super().__init__(x, y, w, h)
+        self.label = label
+        self.key = config_key
+        self.callback = callback
+
+    def draw(self, menu):
+        x, y, w, h = self.rect
+        box_size = min(h, 20)
+        # Box background
+        menu._draw_rect(x, y, box_size, h, color=(0.5, 0.5, 0.5, 0.9))
+        # Check mark
+        if menu.config.get(self.key, False):
+            menu._draw_rect(x + 2, y + 2, box_size - 4, h - 4, color=(0.2, 0.8, 0.2, 0.9))
+        # Label
+        label_x = x + box_size + 5
+        label_y = y + (h - 12) // 2
+        menu._draw_text(self.label, label_x, label_y, 12,
+                        color=(1, 1, 1, 1), uppercase=True)
+
+    def handle_mouse(self, x, y, menu):
+        rx, ry, rw, rh = self.rect
+        if rx <= x <= rx + rw and ry <= y <= ry + rh:
+            new_val = not menu.config.get(self.key, False)
+            menu.config[self.key] = new_val
+            if self.callback:
+                self.callback(new_val)
+            return True
+        return False
+
+
+class NumericSetting(Widget):
+    """A setting with a label, current value, and +/- buttons."""
+    def __init__(self, label, config_key, x, y, w, h, min_val, max_val, step, callback=None):
+        super().__init__(x, y, w, h)
+        self.label = label
+        self.key = config_key
+        self.min_val = min_val
+        self.max_val = max_val
+        self.step = step
+        self.callback = callback   # callback(new_value)
+        # Button rects (relative to the widget's right side)
+        self.inc_rect = None
+        self.dec_rect = None
+
+    def _update_button_rects(self):
+        x, y, w, h = self.rect
+        self.inc_rect = (x + w - 50, y, 25, h)
+        self.dec_rect = (x + w - 25, y, 25, h)
+
+    def draw(self, menu):
+        if self.inc_rect is None:
+            self._update_button_rects()
+        x, y, w, h = self.rect
+        # Draw background for the whole row (optional, for visual grouping)
+        menu._draw_rect(x, y, w, h, color=(0.5, 0.5, 0.5, 0.9))
+        # Draw label
+        menu._draw_text(self.label, x + 5, y + (h - 12)//2, 12, color=(1,1,1,1), uppercase=True)
+        # Draw current value
+        val_str = f"{menu.config[self.key]:.1f}"
+        menu._draw_text(val_str, x + w - 110, y + (h - 12)//2, 12, color=(1,1,1,1), uppercase=False)
+        # Draw '+' and '-' buttons
+        menu._draw_text("+", self.inc_rect[0] + 8, self.inc_rect[1] + (h - 12)//2, 12, color=(1,1,1,1), uppercase=False)
+        menu._draw_text("-", self.dec_rect[0] + 8, self.dec_rect[1] + (h - 12)//2, 12, color=(1,1,1,1), uppercase=False)
+
+    def handle_mouse(self, x, y, menu):
+        if self.inc_rect is None:
+            self._update_button_rects()
+        ix, iy, iw, ih = self.inc_rect
+        dx, dy, dw, dh = self.dec_rect
+        if ix <= x <= ix + iw and iy <= y <= iy + ih:
+            new_val = min(self.max_val, menu.config[self.key] + self.step)
+            menu.config[self.key] = new_val
+            if self.callback:
+                self.callback(new_val)
+            return True
+        elif dx <= x <= dx + dw and dy <= y <= dy + dh:
+            new_val = max(self.min_val, menu.config[self.key] - self.step)
+            menu.config[self.key] = new_val
+            if self.callback:
+                self.callback(new_val)
+            return True
+        return False
+
+
+class Tab:
+    """A tab containing a list of widgets."""
+    def __init__(self, name):
+        self.name = name
+        self.widgets = []
+
+    def add_widget(self, widget):
+        self.widgets.append(widget)
+
+    def layout(self, x, y, width, row_height, spacing):
+        """Assign positions to all widgets in a vertical list."""
+        current_y = y
+        for w in self.widgets:
+            # All widgets span the full width
+            w.rect = (x, current_y, width, row_height)
+            if isinstance(w, NumericSetting):
+                w._update_button_rects()
+            current_y += row_height + spacing
+
+    def draw(self, menu):
+        for w in self.widgets:
+            w.draw(menu)
+
+    def handle_mouse(self, x, y, menu):
+        for w in self.widgets:
+            if w.handle_mouse(x, y, menu):
+                return True
+        return False
+
+
 class Menu:
-    def __init__(self, screen_width, screen_height, config, camera):
+    def __init__(self, window, screen_width, screen_height, config_dict, camera, player=None,
+                 stats_panel=None, fps_overlay=None, compass=None):
+        self.window = window
         self.width = screen_width
         self.height = screen_height
-        self.config = config
+        self.config = config_dict
         self.camera = camera
+        self.player = player
+        self.stats_panel = stats_panel
+        self.fps_overlay = fps_overlay
+        self.compass = compass
         self.active = False
+        self.active_tab_index = 0
 
-        # Layout – all y‑coordinates are top‑origin (0 = top)
+        # Panel dimensions
         self.panel_x = 50
-        self.panel_y = 50 # top edge of panel
-        self.panel_w = 500
-        self.panel_h = 250
-        self.button_h = 30
-        self.button_spacing = 15
+        self.panel_y = 50
+        self.panel_w = 550
+        self.panel_h = 400
+        self.title_height = 40
+        self.tab_header_height = 30
+        self.bottom_margin = 60   # space for Save button
 
-        # Title bar occupies the top 40 pixels of the panel
-        title_height = 40
-        self.title_bar_y = self.panel_y         # top edge of title bar
+        # Title and close button
         self.title_text = "Settings"
-
-        # Close button (X) in top‑right corner of title bar
         close_size = 30
-        self.close_button = (self.panel_x + self.panel_w - close_size - 10,
-                             self.panel_y + (title_height - close_size) // 2,
-                             close_size, close_size,
-                             self.close)
+        self.close_button = (
+            self.panel_x + self.panel_w - close_size - 10,
+            self.panel_y + (self.title_height - close_size) // 2,
+            close_size, close_size,
+            self.close
+        )
 
-        # First setting row starts 10 pixels below title bar
-        start_y = self.panel_y + title_height + 10
+        # Save button
+        self.save_button = (
+            self.panel_x + 10,
+            self.panel_y + self.panel_h - 40,
+            150, 30,
+            self.save
+        )
 
-        self.settings = [
-            ("Mouse Sens", "mouse_sensitivity", self.panel_x + 10, start_y, 350, self.button_h,
-             lambda: self.change_setting("mouse_sensitivity", 0.1),
-             lambda: self.change_setting("mouse_sensitivity", -0.1)),
-            ("Move Speed", "movement_speed", self.panel_x + 10, start_y + self.button_h + self.button_spacing, 350, self.button_h,
-             lambda: self.change_setting("movement_speed", 1.0),
-             lambda: self.change_setting("movement_speed", -1.0)),
-            ("Player Height", "player_height", self.panel_x + 10, start_y + 2*(self.button_h + self.button_spacing), 350, self.button_h,
-             lambda: self.change_setting("player_height", 0.1),
-             lambda: self.change_setting("player_height", -0.1)),
-        ]
-        # Save button below the last setting
-        self.save_button = (self.panel_x + 10,
-                            start_y + 3*(self.button_h + self.button_spacing) + 10,
-                            150, self.button_h,
-                            self.close)
+        # Build tabs and widgets
+        self.tabs = []
+        self._build_tabs()
 
-        self.buttons = []
-        self.init_ui()
-
-        # Shaders
+        # Shaders and common geometry
         self.rect_shader = compileProgram(
             compileShader(RECT_VERTEX_SHADER, GL_VERTEX_SHADER),
             compileShader(RECT_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
@@ -74,7 +198,7 @@ class Menu:
             compileShader(TEXT_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
         )
 
-        # Common quad VAO (position + texcoord) – with indices for GL_TRIANGLES
+        # Common quad VAO (position + texcoord) with indices
         quad_verts = numpy.array([
             -0.5, -0.5,  0.0, 0.0,
              0.5, -0.5,  1.0, 0.0,
@@ -104,6 +228,9 @@ class Menu:
         # Cache uniform locations
         self._cache_uniforms()
 
+        # Initial layout
+        self._relayout()
+
     def _cache_uniforms(self):
         self.rect_uScreenSize = glGetUniformLocation(self.rect_shader, "uScreenSize")
         self.rect_uColor = glGetUniformLocation(self.rect_shader, "uColor")
@@ -117,22 +244,100 @@ class Menu:
         self.text_uTexRect = glGetUniformLocation(self.text_shader, "uTexRect")
         self.text_uFontTexture = glGetUniformLocation(self.text_shader, "uFontTexture")
 
+    def _build_tabs(self):
+        # Helper callbacks
+        def update_mouse_sens(val):
+            self.camera.mouse_sensitivity = val
+        def update_move_speed(val):
+            self.camera.movement_speed = val
+        def update_player_height(val):
+            if self.player:
+                self.player.height = val
+                self.camera.adjust_height()
+        def update_show_fps(val):
+            if self.fps_overlay:
+                self.fps_overlay.enabled = val
+            self.config["show_fps"] = val
+        def update_draw_stats(val):
+            if self.stats_panel:
+                self.stats_panel.enabled = val
+        def update_draw_compass(val):
+            if self.compass:
+                self.compass.enabled = val
+        def update_draw_fog(val):
+            # fog handled in main loop via config
+            pass
+        def update_snow_draw(val):
+            # handled by sky; can be updated on next frame
+            pass
+        def update_network_mode(val):
+            # Changing network mode requires restart; just log
+            logging.info(f"Network mode changed to {val} – restart required for full effect")
+        def update_camera_mode(val):
+            # val is bool: True = third person (mode 1), False = first person (mode 0)
+            new_mode = 1 if val else 0
+            if self.camera:
+                self.camera.set_mode(new_mode)
+            self.config["camera_mode"] = new_mode
+
+        # ---- Core tab ----
+        core = Tab("Core")
+        core.add_widget(NumericSetting("Mouse Sens", "mouse_sensitivity", 0,0,0,0,
+                                       0.1, 10.0, 0.1, update_mouse_sens))
+        core.add_widget(NumericSetting("Move Speed", "movement_speed", 0,0,0,0,
+                                       1.0, 50.0, 1.0, update_move_speed))
+        core.add_widget(NumericSetting("Player Height", "player_height", 0,0,0,0,
+                                       0.5, 5.0, 0.1, update_player_height))
+        core.add_widget(CheckBox("Show FPS", "show_fps", 0,0,20,20, update_show_fps))
+        core.add_widget(CheckBox("Draw Stats", "draw_stats", 0,0,20,20, update_draw_stats))
+        core.add_widget(CheckBox("Draw Compass", "draw_compass", 0,0,20,20, update_draw_compass))
+        core.add_widget(CheckBox("Draw Fog", "draw_fog", 0,0,20,20, update_draw_fog))
+        core.add_widget(CheckBox("Snow Draw", "snow_draw", 0,0,20,20, update_snow_draw))
+        self.tabs.append(core)
+
+        # ---- Player tab ----
+        player_tab = Tab("Player")
+        player_tab.add_widget(CheckBox("Third Person", "camera_mode", 0,0,20,20, update_camera_mode))
+        # Additional player settings can be added here
+        self.tabs.append(player_tab)
+
+        # ---- Network tab ----
+        net_tab = Tab("Network")
+        net_tab.add_widget(CheckBox("Network Mode", "network_mode", 0,0,20,20, update_network_mode))
+        self.tabs.append(net_tab)
+
+    def _relayout(self):
+        """Compute positions of all UI elements after a resize."""
+        # Content area below title and tab headers
+        content_y = self.panel_y + self.title_height + self.tab_header_height + 10
+        content_h = self.panel_h - self.title_height - self.tab_header_height - self.bottom_margin
+        # Each widget row height
+        row_h = 30
+        spacing = 5
+        # Layout each tab's widgets in the content area
+        for tab in self.tabs:
+            tab.layout(self.panel_x + 10, content_y, self.panel_w - 20, row_h, spacing)
+
+        # Also reposition close and save buttons (they are not in tabs)
+        # Close button already defined with absolute coordinates; they depend on panel_x/w
+        close_size = 30
+        self.close_button = (
+            self.panel_x + self.panel_w - close_size - 10,
+            self.panel_y + (self.title_height - close_size) // 2,
+            close_size, close_size,
+            self.close
+        )
+        self.save_button = (
+            self.panel_x + 10,
+            self.panel_y + self.panel_h - 40,
+            150, 30,
+            self.save
+        )
+
     def resize(self, width, height):
         self.width = width
         self.height = height
-
-    def init_ui(self):
-        # Add close button
-        self.buttons.append(((self.close_button[0], self.close_button[1],
-                              self.close_button[2], self.close_button[3]),
-                             self.close_button[4]))
-        for label, key, x, y, w, h, inc_action, dec_action in self.settings:
-            inc_rect = (x + w - 50, y, 25, h)
-            dec_rect = (x + w - 25, y, 25, h)
-            self.buttons.append((inc_rect, inc_action))
-            self.buttons.append((dec_rect, dec_action))
-        x, y, w, h, action = self.save_button
-        self.buttons.append(((x, y, w, h), action))
+        self._relayout()
 
     def _create_font_texture(self):
         cols = 16
@@ -161,37 +366,45 @@ class Menu:
         glBindTexture(GL_TEXTURE_2D, 0)
         return tex_id
 
-    def change_setting(self, key, delta):
-        new_val = self.config[key] + delta
-        if key == "mouse_sensitivity":
-            new_val = max(0.1, min(10.0, new_val))
-        elif key == "movement_speed":
-            new_val = max(1.0, min(50.0, new_val))
-        elif key == "player_height":
-            new_val = max(0.5, min(5.0, new_val))
-        self.config[key] = new_val
-        if key == "mouse_sensitivity":
-            self.camera.mouse_sensitivity = new_val
-        elif key == "movement_speed":
-            self.camera.movement_speed = new_val
-        elif key == "player_height":
-            self.camera.player.height = new_val
-            self.camera.adjust_height()
-        logging.error(f"Clicked {key} +/- : new value = {new_val}")
-
     def close(self):
-        config.Config.save(self.config)
         self.active = False
-        logging.error("Menu closed, settings saved.")
+        if self.window:
+            glfw.set_input_mode(self.window, glfw.CURSOR, glfw.CURSOR_DISABLED)
+        logging.debug("Menu closed.")
+
+    def save(self):
+        config.Config.save(self.config)
+        self.close()
+        logging.debug("Settings saved.")
 
     def handle_mouse(self, xpos, ypos, button):
         if not self.active or button != glfw.MOUSE_BUTTON_LEFT:
             return False
-        # ypos is already top-origin (0 at top)
-        for (x, y, w, h), action in self.buttons:
-            if x <= xpos <= x + w and y <= ypos <= y + h:
-                action()
+        # Check close button
+        cx, cy, cw, ch, action = self.close_button
+        if cx <= xpos <= cx + cw and cy <= ypos <= cy + ch:
+            action()
+            return True
+        # Check save button
+        sx, sy, sw, sh, action = self.save_button
+        if sx <= xpos <= sx + sw and sy <= ypos <= sy + sh:
+            action()
+            return True
+        # Check tab headers
+        header_y = self.panel_y + self.title_height
+        header_h = self.tab_header_height
+        tab_x = self.panel_x + 10
+        for i, tab in enumerate(self.tabs):
+            # Simple tab width based on text length
+            text_width = len(tab.name) * 12  # approximate
+            tab_w = text_width + 20
+            if tab_x <= xpos <= tab_x + tab_w and header_y <= ypos <= header_y + header_h:
+                self.active_tab_index = i
                 return True
+            tab_x += tab_w + 5
+        # Forward to active tab's widgets
+        if 0 <= self.active_tab_index < len(self.tabs):
+            return self.tabs[self.active_tab_index].handle_mouse(xpos, ypos, self)
         return False
 
     def draw(self):
@@ -202,76 +415,62 @@ class Menu:
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
-        # Draw rectangles
+        # Draw background panel
         glUseProgram(self.rect_shader)
         glUniform2f(self.rect_uScreenSize, self.width, self.height)
+        self._draw_rect(self.panel_x, self.panel_y, self.panel_w, self.panel_h, (0.2,0.2,0.2,0.8))
 
-        # Background panel
-        glUniform4f(self.rect_uColor, 0.2, 0.2, 0.2, 0.8)
-        self._draw_rect(self.panel_x, self.panel_y, self.panel_w, self.panel_h)
+        # Title bar
+        self._draw_rect(self.panel_x, self.panel_y, self.panel_w, self.title_height, (0.3,0.3,0.3,0.9))
 
-        # Title bar background
-        title_height = 40
-        glUniform4f(self.rect_uColor, 0.3, 0.3, 0.3, 0.9)
-        self._draw_rect(self.panel_x, self.panel_y, self.panel_w, title_height)
-
-        # Close button background
+        # Close button
         cx, cy, cw, ch, _ = self.close_button
-        glUniform4f(self.rect_uColor, 0.6, 0.2, 0.2, 0.9)
-        self._draw_rect(cx, cy, cw, ch)
+        self._draw_rect(cx, cy, cw, ch, (0.6,0.2,0.2,0.9))
 
-        # Setting backgrounds
-        for label, key, x, y, w, h, inc_action, dec_action in self.settings:
-            glUniform4f(self.rect_uColor, 0.5, 0.5, 0.5, 0.9)
-            self._draw_rect(x, y, w, h)
+        # Tab headers
+        header_y = self.panel_y + self.title_height
+        header_h = self.tab_header_height
+        tab_x = self.panel_x + 10
+        for i, tab in enumerate(self.tabs):
+            text_width = len(tab.name) * 12
+            tab_w = text_width + 20
+            # Active tab highlighted
+            color = (0.4,0.6,0.9,0.9) if i == self.active_tab_index else (0.5,0.5,0.5,0.7)
+            self._draw_rect(tab_x, header_y, tab_w, header_h, color)
+            self._draw_text(tab.name, tab_x + 10, header_y + (header_h - 12)//2, 12,
+                            color=(1,1,1,1), uppercase=True)
+            tab_x += tab_w + 5
 
-        # Save button background
-        x, y, w, h, _ = self.save_button
-        glUniform4f(self.rect_uColor, 0.5, 0.5, 0.5, 0.9)
-        self._draw_rect(x, y, w, h)
+        # Draw active tab widgets
+        if 0 <= self.active_tab_index < len(self.tabs):
+            self.tabs[self.active_tab_index].draw(self)
 
-        # Draw text
-        glUseProgram(self.text_shader)
-        glUniform2f(self.text_uScreenSize, self.width, self.height)
-        glActiveTexture(GL_TEXTURE0)
-        glBindTexture(GL_TEXTURE_2D, self.font_tex)
-        glUniform1i(self.text_uFontTexture, 0)
-        glUniform3f(self.text_uColor, 1.0, 1.0, 1.0)
-
-        char_size = 12
-
-        # Title text (centered in title bar)
-        title_width = len(self.title_text) * char_size
-        title_x = self.panel_x + (self.panel_w - title_width) // 2
-        title_center_y = self.panel_y + (title_height - char_size) // 2
-        self._draw_text(self.title_text, title_x, title_center_y, char_size, uppercase=True)
-
-        for label, key, x, y, w, h, inc_action, dec_action in self.settings:
-            y_center = y + (h - char_size) // 2
-            self._draw_text(label, x + 5, y_center, char_size, uppercase=True)
-            val_str = f"{self.config[key]:.1f}"
-            self._draw_text(val_str, x + w - 110, y_center, char_size, uppercase=False)
-            self._draw_text("+", x + w - 55, y_center, char_size, uppercase=False)
-            self._draw_text("-", x + w - 30, y_center, char_size, uppercase=False)
-
-        # Close button text (X)
-        cx, cy, cw, ch, _ = self.close_button
-        y_center = cy + (ch - char_size) // 2
-        self._draw_text("X", cx + (cw - char_size) // 2, y_center, char_size, uppercase=True)
-
-        # Save button text
+        # Save button
         sx, sy, sw, sh, _ = self.save_button
-        y_center = sy + (sh - char_size) // 2
-        save_text = "Save"
-        text_width = len(save_text) * char_size
-        self._draw_text(save_text, sx + (sw - text_width) // 2, y_center, char_size, uppercase=True)
+        self._draw_rect(sx, sy, sw, sh, (0.5,0.5,0.5,0.9))
+        self._draw_text("Save", sx + (sw - 4*12)//2, sy + (sh - 12)//2, 12,
+                        color=(1,1,1,1), uppercase=True)
+
+        # Title text
+        title_width = len(self.title_text) * 12
+        title_x = self.panel_x + (self.panel_w - title_width) // 2
+        title_center_y = self.panel_y + (self.title_height - 12) // 2
+        self._draw_text(self.title_text, title_x, title_center_y, 12,
+                        color=(1,1,1,1), uppercase=True)
+
+        # Close button text
+        cx, cy, cw, ch, _ = self.close_button
+        self._draw_text("X", cx + (cw - 12)//2, cy + (ch - 12)//2, 12,
+                        color=(1,1,1,1), uppercase=True)
 
         glDisable(GL_BLEND)
         glEnable(GL_DEPTH_TEST)
 
-    def _draw_rect(self, x, y, w, h):
-        """Draw rectangle with top‑origin coordinates (0 = top)."""
-        # Convert to bottom‑origin for OpenGL
+    def _draw_rect(self, x, y, w, h, color):
+        """Draw a rectangle with given color (r,g,b,a) using top‑origin coordinates."""
+        glUseProgram(self.rect_shader)
+        glUniform2f(self.rect_uScreenSize, self.width, self.height)
+        glUniform4f(self.rect_uColor, *color)
         y_bottom = self.height - (y + h)
         glUniform2f(self.rect_uOffset, x + w/2, y_bottom + h/2)
         glUniform2f(self.rect_uScale, w, h)
@@ -279,9 +478,16 @@ class Menu:
         glDrawElements(GL_TRIANGLES, self.quad_index_count, GL_UNSIGNED_INT, None)
         glBindVertexArray(0)
 
-    def _draw_text(self, text, x, y, size, uppercase=True):
-        """Draw text with top‑origin coordinates (0 = top). y is the baseline (center of characters)."""
+    def _draw_text(self, text, x, y, size, color=(1,1,1,1), uppercase=True):
+        """Draw text with given color, top‑origin coordinates, y is baseline (center)."""
+        glUseProgram(self.text_shader)
+        glUniform2f(self.text_uScreenSize, self.width, self.height)
+        glUniform3f(self.text_uColor, color[0], color[1], color[2])
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, self.font_tex)
+        glUniform1i(self.text_uFontTexture, 0)
         glBindVertexArray(self.quad_vao)
+
         for i, ch in enumerate(text):
             code = ord(ch)
             if uppercase and 97 <= code <= 122:
@@ -301,9 +507,9 @@ class Menu:
             glUniform4f(self.text_uTexRect, *tex_rect)
 
             pos_x = x + i * size
-            # Convert y from top‑origin to bottom‑origin and compute center
             y_center = self.height - (y + size/2)
             glUniform2f(self.text_uOffset, pos_x + size/2, y_center)
             glUniform2f(self.text_uScale, size, size)
             glDrawElements(GL_TRIANGLES, self.quad_index_count, GL_UNSIGNED_INT, None)
+
         glBindVertexArray(0)

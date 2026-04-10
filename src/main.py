@@ -326,6 +326,7 @@ def main():
         # ----- Update world (chunks, sky, etc.) -----
         chunk_manager.update(camera.position)
         stone_manager.update()
+        tree_manager.update()
         health_manager.update(dt)
         mob_manager.update(dt)
         sky.update(dt)
@@ -383,7 +384,7 @@ def main():
             shader_3d.set_float("uFogStart", fog_start)
             shader_3d.set_float("uFogEnd", fog_end)
         else:
-            shader_3d.set_vec3("uFogColor", fog_color)   # any color, won't be used
+            shader_3d.set_vec3("uFogColor", fog_color)
             shader_3d.set_float("uFogStart", 1e9)
             shader_3d.set_float("uFogEnd", 2e9)
 
@@ -391,8 +392,8 @@ def main():
 
         shader_3d.use()
         chunk_manager.draw(shader_3d)
-        tree_manager.draw(view, proj, light_dir, light_intensity)
         stone_manager.draw(view, proj, light_dir, light_intensity)
+        tree_manager.draw(view, proj, light_dir, light_intensity)
         health_manager.draw(view, proj, light_dir, light_intensity)
         mob_manager.draw(view, proj, light_dir, light_intensity, screen.width, screen.height)
 
@@ -435,6 +436,7 @@ def main():
 
     chunk_manager.save_all_chunks()
     stone_manager.shutdown()
+    tree_manager.shutdown()
     mob_manager.shutdown()
     health_manager.shutdown()
     chunk_manager.shutdown()

@@ -208,18 +208,17 @@ class Tree:
         self.foliage_radius = foliage_radius
         self.rotation_y = rotation_y if rotation_y is not None else random.uniform(0, 360)
         self.geometry = TreeGeometry.get_instance()
-        self.shader = Shader(TREE_VERTEX_SHADER_SRC, TREE_FRAGMENT_SHADER_SRC)
 
-    def draw(self, view, projection, light_dir, light_intensity):
+    def draw(self, shader, view, projection, light_dir, light_intensity):
         y = get_height(self.base_x, self.base_z)
         if y < 0.1:
             return
 
-        self.shader.use()
-        self.shader.set_mat4("uView", view)
-        self.shader.set_mat4("uProjection", projection)
-        self.shader.set_vec3("uLightDir", light_dir)
-        self.shader.set_float("uLightIntensity", light_intensity)
+        shader.use()
+        shader.set_mat4("uView", view)
+        shader.set_mat4("uProjection", projection)
+        shader.set_vec3("uLightDir", light_dir)
+        shader.set_float("uLightIntensity", light_intensity)
 
         # Build model matrix: rotation then translation
         rad = math.radians(self.rotation_y)
@@ -236,22 +235,22 @@ class Tree:
         model[2, 3] = self.base_z
 
         # Draw trunk
-        self.shader.set_mat4("uModel", model)
-        self.shader.set_int("uPart", 0)
+        shader.set_mat4("uModel", model)
+        shader.set_int("uPart", 0)
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, self.geometry.get_trunk_texture())
-        self.shader.set_int("uTrunkTexture", 0)
+        shader.set_int("uTrunkTexture", 0)
         glBindVertexArray(self.geometry.get_trunk_vao())
         glDrawElements(GL_TRIANGLES, self.geometry.get_trunk_vertex_count(), GL_UNSIGNED_INT, None)
 
         # Draw foliage
         foliage_model = model.copy()
         foliage_model[1, 3] = y + self.trunk_height
-        self.shader.set_mat4("uModel", foliage_model)
-        self.shader.set_int("uPart", 1)
+        shader.set_mat4("uModel", foliage_model)
+        shader.set_int("uPart", 1)
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, self.geometry.get_foliage_texture())
-        self.shader.set_int("uFoliageTexture", 0)
+        shader.set_int("uFoliageTexture", 0)
         glBindVertexArray(self.geometry.get_foliage_vao())
         glDrawElements(GL_TRIANGLES, self.geometry.get_foliage_vertex_count(), GL_UNSIGNED_INT, None)
 
@@ -263,15 +262,39 @@ class Tree:
 class TreeManager:
     def __init__(self, chunk_manager, chunk_size=16, spacing=1.0):
         self.chunk_manager = chunk_manager
+        self.shader = Shader(TREE_VERTEX_SHADER_SRC, TREE_FRAGMENT_SHADER_SRC)
+        self.trees = {}
+        self.loaded_chunks = set()
+
+    def update(self):
+        current_chunks = set(self.chunk_manager.chunks.keys())
+        # Remove items for unloaded chunks
+        for chunk_key in list(self.loaded_chunks):
+            if chunk_key not in current_chunks:
+                self.trees.pop(chunk_key, None)
+                self.loaded_chunks.discard(chunk_key)
+        # Add items for newly loaded chunks
+        for chunk_key in current_chunks:
+            if chunk_key not in self.loaded_chunks:
+                chunk = self.chunk_manager.chunks[chunk_key]
+                trees_list = []
+                for tree_data in chunk.trees:
+                    tree = Tree(
+                        tree_data['x'],
+                        tree_data['z'],
+                        trunk_height=tree_data.get('trunk_height', 1.5),
+                        foliage_radius=tree_data.get('foliage_radius', 0.6),
+                        rotation_y=tree_data.get('rotation_y')
+                    )
+                    trees_list.append(tree)
+                self.trees[chunk_key] = trees_list
+                self.loaded_chunks.add(chunk_key)
 
     def draw(self, view, projection, light_dir, light_intensity):
-        for chunk in self.chunk_manager.chunks.values():
-            for tree_data in chunk.trees:
-                tree = Tree(
-                    tree_data['x'],
-                    tree_data['z'],
-                    trunk_height=tree_data.get('trunk_height', 1.5),
-                    foliage_radius=tree_data.get('foliage_radius', 0.6),
-                    rotation_y=tree_data.get('rotation_y')
-                )
-                tree.draw(view, projection, light_dir, light_intensity)
+        for trees_list in self.trees.values():
+            for tree in trees_list:
+                tree.draw(self.shader, view, projection, light_dir, light_intensity)
+
+    def shutdown(self):
+        self.trees.clear()
+        self.loaded_chunks.clear()

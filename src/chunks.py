@@ -3,17 +3,17 @@ import numpy
 import ctypes
 import multiprocessing as mp
 import queue
+import math
+import random
+
 from OpenGL.GL import *
 
+from network import NetworkClient
 from camera import get_height
 
+
 def generate_chunk_data(cx, cz, chunk_size, spacing):
-    """
-    Generate vertices and indices for a chunk.
-    This function runs in a worker process.
-    Returns a tuple (cx, cz, vertices, indices).
-    """
-    # Physical size of one chunk in world units
+    is_portal = False
     phys_width = (chunk_size - 1) * spacing
     phys_height = (chunk_size - 1) * spacing
     world_origin_x = cx * phys_width
@@ -57,11 +57,37 @@ def generate_chunk_data(cx, cz, chunk_size, spacing):
                             i + 1, i + chunk_size + 1, i + chunk_size])
     indices = numpy.array(indices, dtype=numpy.uint32)
 
-    return (cx, cz, vertices, indices)
+    stones, trees = [], []
+    rng = random.Random((cx * 1000003) ^ (cz * 1000033))
+    num_trees = rng.randint(0, 2)
+    for _ in range(num_trees):
+        x = world_origin_x + rng.uniform(1.5, phys_width - 1.5)
+        z = world_origin_z + rng.uniform(1.5, phys_height - 1.5)
+        y = get_height(x, z)
+
+        # Random tree appearance properties
+        trunk_height = rng.uniform(1.8, 2.2)
+        foliage_radius = rng.uniform(1.0, 1.4)
+        rotation_y = rng.uniform(0, 2 * math.pi)
+
+        stones.append({
+            'x': x, 'y': y, 'z': z,
+            'trunk_height': trunk_height,
+            'foliage_radius': foliage_radius,
+            'rotation_y': rotation_y
+        })
+
+        trees.append({
+            'x': x+.5, 'y': y, 'z': z+.5,
+            'trunk_height': trunk_height,
+            'foliage_radius': foliage_radius,
+            'rotation_y': rotation_y
+        })
+
+    return (is_portal, cx, cz, vertices, indices, stones, trees)
 
 
 class ChunkWorker(mp.Process):
-    """A worker process that generates chunks on demand."""
     def __init__(self, request_queue, result_queue, chunk_size, spacing):
         super().__init__(daemon=True)
         self.request_queue = request_queue
@@ -72,21 +98,19 @@ class ChunkWorker(mp.Process):
     def run(self):
         while True:
             try:
-                # Block until a request arrives (timeout to allow checking stop event)
                 req = self.request_queue.get(timeout=0.5)
-                if req is None:       # sentinel to stop
+                if req is None:
                     break
                 cx, cz = req
                 data = generate_chunk_data(cx, cz, self.chunk_size, self.spacing)
                 self.result_queue.put(data)
             except queue.Empty:
                 continue
-            except Exception as e: # Log error and continue
-                logging.error(f"Worker error: {e}")
+            except Exception as err:
+                logging.error(f"Worker error: {err}")
 
 
 class ChunkGenerator:
-    """Manages a pool of worker processes for chunk generation."""
     def __init__(self, chunk_size, spacing, num_workers=None):
         self.chunk_size = chunk_size
         self.spacing = spacing
@@ -102,11 +126,9 @@ class ChunkGenerator:
             self.workers.append(w)
 
     def request_chunk(self, cx, cz):
-        """Queue a chunk generation request."""
         self.request_queue.put((cx, cz))
 
     def get_completed(self):
-        """Return a list of completed chunk data (non‑blocking)."""
         completed = []
         while True:
             try:
@@ -117,20 +139,21 @@ class ChunkGenerator:
         return completed
 
     def stop(self):
-        """Stop all workers."""
         for _ in self.workers:
-            self.request_queue.put(None)   # sentinel for each worker
+            self.request_queue.put(None)
         for w in self.workers:
             w.join(timeout=1.0)
 
 
 class Chunk:
-    """Chunk that lives on the GPU. Must be created on the main thread."""
-    def __init__(self, cx, cz, vertices, indices):
+    def __init__(self, is_portal=False, cx=0, cz=0, vertices=[], indices=[], stones=None, trees=None):
+        self.is_portal = is_portal
         self.cx = cx
         self.cz = cz
         self.vertices = vertices
         self.indices = indices
+        self.stones = stones if stones is not None else []
+        self.trees = trees if trees is not None else []
         self.vao = None
         self.vbo = None
         self.ebo = None
@@ -167,7 +190,6 @@ class Chunk:
         glBindVertexArray(0)
 
     def delete(self):
-        """Delete OpenGL buffers (must be called on main thread)."""
         if self.vao:
             glDeleteVertexArrays(1, [self.vao])
             glDeleteBuffers(1, [self.vbo])
@@ -176,30 +198,34 @@ class Chunk:
 
 
 class ChunkManager:
-    def __init__(self, chunk_size=32, load_radius=3, spacing=1.0, use_multiprocessing=True, player=None):
+    def __init__(self, chunk_size=32, load_radius=3, spacing=1.0,
+                 use_multiprocessing=True, player=None, network_mode=False, server_url=''):
         self.chunk_size = chunk_size
         self.load_radius = load_radius
         self.spacing = spacing
         self.serializer = player.serializer if player else None
         self.chunks = {}
         self.pending_requests = set()
+        self.network_mode = network_mode
+        self.network_client = None
+        if network_mode and server_url:
+            self.network_client = NetworkClient(server_url)
         if use_multiprocessing:
             self.generator = ChunkGenerator(chunk_size, spacing)
         else:
             self.generator = None
-        # Pre-load chunks around the player's starting position
         if player:
             phys_size = (chunk_size - 1) * spacing
             player_cx = int(player.position[0] // phys_size)
             player_cz = int(player.position[2] // phys_size)
             self.load_chunks_around(player_cx, player_cz)
+        self.first_running = True
 
     def _generate_sync(self, cx, cz):
         data = generate_chunk_data(cx, cz, self.chunk_size, self.spacing)
         return Chunk(*data)
 
     def load_chunks_around(self, center_cx, center_cz):
-        """Load chunks from database within load_radius of the given chunk coordinates."""
         if not self.serializer:
             return
         for dx in range(-self.load_radius, self.load_radius + 1):
@@ -207,18 +233,17 @@ class ChunkManager:
                 cx, cz = center_cx + dx, center_cz + dz
                 key = (cx, cz)
                 if key not in self.chunks:
-                    vertices, indices = self.serializer.load_chunk(cx, cz)
+                    is_portal, vertices, indices, stones, trees = self.serializer.load_chunk(cx, cz)
                     if vertices is not None:
-                        self.chunks[key] = Chunk(cx, cz, vertices, indices)
+                        self.chunks[key] = Chunk(is_portal, cx, cz, vertices, indices, stones, trees)
 
     def save_all_chunks(self):
-        """Save all currently loaded chunks to the database."""
         if not self.serializer:
             return
+        self.serializer.clear_chunks()
         for (cx, cz), chunk in self.chunks.items():
-            self.serializer.save_chunk(cx, cz, chunk.vertices, chunk.indices)
+            self.serializer.save_chunk(chunk.is_portal, cx, cz, chunk.vertices, chunk.indices, chunk.stones, chunk.trees)
 
-    # In update(), modify the part that generates a chunk: try loading first
     def update(self, camera_pos):
         phys_size = (self.chunk_size - 1) * self.spacing
         cx = int(camera_pos[0] // phys_size)
@@ -229,39 +254,50 @@ class ChunkManager:
             for dz in range(-self.load_radius, self.load_radius + 1):
                 needed.add((cx + dx, cz + dz))
 
-        # Remove chunks that are no longer needed
         for key in list(self.chunks.keys()):
             if key not in needed:
                 self.chunks.pop(key).delete()
 
-        # Remove pending requests that are no longer needed
         self.pending_requests = {req for req in self.pending_requests if req in needed}
 
-        # Load missing chunks: first try DB, then request generation
         for key in needed:
             if key not in self.chunks and key not in self.pending_requests:
-                # Try to load from database
-                if self.serializer:
-                    vertices, indices = self.serializer.load_chunk(*key)
+                if self.network_mode and self.network_client:
+                    self.pending_requests.add(key)
+                    self.network_client.request_chunk(*key)
+                elif self.first_running and self.serializer:
+                    self.first_running = not self.first_running
+                    is_portal, vertices, indices, stones, trees = self.serializer.load_chunk(*key)
                     if vertices is not None:
-                        self.chunks[key] = Chunk(*key, vertices, indices)
+                        self.chunks[key] = Chunk(is_portal, *key, vertices, indices, stones, trees)
                         continue
-                # If not found, request generation
-                self.pending_requests.add(key)
-                if self.generator:
+                elif self.generator:
+                    self.pending_requests.add(key)
                     self.generator.request_chunk(*key)
                 else:
                     self.chunks[key] = self._generate_sync(*key)
-                    self.pending_requests.discard(key)
 
-        # Process completed chunks from generator (same as before)
-        if self.generator:
-            for data in self.generator.get_completed():
-                cx, cz, vertices, indices = data
+        if self.network_client:
+            for data in self.network_client.get_completed():
+                is_portal, cx, cz, vertices, indices, stones, trees = data
                 key = (cx, cz)
                 if key in self.pending_requests and key in needed:
                     self.pending_requests.discard(key)
-                    self.chunks[key] = Chunk(cx, cz, vertices, indices)
+                    if vertices is not None:
+                        chunk = Chunk(is_portal, cx, cz, vertices, indices, stones, trees)
+                        self.chunks[key] = chunk
+                        if self.serializer:
+                            self.serializer.save_chunk(cx, cz, vertices, indices, stones, trees)
+                else:
+                    self.pending_requests.discard(key)
+
+        if self.generator:
+            for data in self.generator.get_completed():
+                is_portal, cx, cz, vertices, indices, stones, trees = data
+                key = (cx, cz)
+                if key in self.pending_requests and key in needed:
+                    self.pending_requests.discard(key)
+                    self.chunks[key] = Chunk(is_portal, cx, cz, vertices, indices, stones, trees)
                 else:
                     self.pending_requests.discard(key)
 
@@ -270,7 +306,6 @@ class ChunkManager:
             chunk.draw(shader)
 
     def shutdown(self):
-        """Stop background workers and clean up."""
         if self.generator:
             self.generator.stop()
         for chunk in self.chunks.values():

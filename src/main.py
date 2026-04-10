@@ -34,6 +34,8 @@ from gui_fps import FPSOverlay
 from compass import Compass
 from camera import Camera
 from chunks import ChunkManager
+from stones import StoneManager
+from trees import TreeManager
 from target import Target
 from sky import Sky
 from player import Player
@@ -41,7 +43,6 @@ from player_model import PlayerModel
 from health import HealthManager
 from mobs import get_aimed_mob, MobManager
 from weapon import Ammo, Weapon
-from trees import TreeManager
 
 
 def compute_projection(width, height):
@@ -62,6 +63,8 @@ def main():
     setup_logging(config.get('log_config', {}))
 
     db_path = config.get("db_path", "data.db")
+    network_mode = config.get("network_mode", False)
+    server_url = config.get("server_url", "http://localhost:8080")
     mouse_sensitivity = config["mouse_sensitivity"]
     movement_speed = config["movement_speed"]
     player_height = config["player_height"]
@@ -136,8 +139,11 @@ def main():
         chunk_size=chunk_size,
         load_radius=load_radius,
         spacing=terrain_spacing,
-        player=player
+        player=player,
+        network_mode=network_mode,
+        server_url=server_url
     )
+
     sky = Sky(chunk_manager,
               cloud_count_per_chunk=cloud_count_per_chunk,
               star_count=star_count,
@@ -149,8 +155,17 @@ def main():
               fog_start=fog_start,
               fog_end=fog_end)
 
-    shader_3d = Shader(VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC)
-    shader_crosshair = Shader(CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC)
+    tree_manager = TreeManager(
+        chunk_manager,
+        chunk_size=chunk_size,
+        spacing=terrain_spacing
+    )
+
+    stone_manager = StoneManager(
+        chunk_manager,
+        chunk_size=chunk_size,
+        spacing=terrain_spacing
+    )
 
     health_manager = HealthManager(player, chunk_manager,
                                 chunk_size=chunk_size, spacing=terrain_spacing)
@@ -159,10 +174,11 @@ def main():
                              chunk_size=chunk_size, spacing=terrain_spacing)
     player.set_mob_manager(mob_manager)
 
+    shader_3d = Shader(VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC)
+    shader_crosshair = Shader(CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC)
+
     player_model = PlayerModel(shader_3d)
     player.set_model(player_model)
-
-    tree_manager = TreeManager(chunk_manager, chunk_size=chunk_size, spacing=terrain_spacing)
 
     targets = []
     for _ in range(TARGET_COUNT):
@@ -309,9 +325,9 @@ def main():
 
         # ----- Update world (chunks, sky, etc.) -----
         chunk_manager.update(camera.position)
+        stone_manager.update()
         health_manager.update(dt)
         mob_manager.update(dt)
-        tree_manager.update(camera.position)
         sky.update(dt)
         light_dir, light_intensity = sky.get_combined_light()
 
@@ -375,9 +391,10 @@ def main():
 
         shader_3d.use()
         chunk_manager.draw(shader_3d)
+        tree_manager.draw(view, proj, light_dir, light_intensity)
+        stone_manager.draw(view, proj, light_dir, light_intensity)
         health_manager.draw(view, proj, light_dir, light_intensity)
         mob_manager.draw(view, proj, light_dir, light_intensity, screen.width, screen.height)
-        tree_manager.draw(view, proj, light_dir, light_intensity, camera.position)
 
         for target in targets:
             target.draw(shader_3d, view, proj, light_dir)
@@ -417,9 +434,9 @@ def main():
         glfw.poll_events()
 
     chunk_manager.save_all_chunks()
+    stone_manager.shutdown()
     mob_manager.shutdown()
     health_manager.shutdown()
-    tree_manager.shutdown()
     chunk_manager.shutdown()
     player.save()
     glfw.terminate()

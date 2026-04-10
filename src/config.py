@@ -55,6 +55,9 @@ class Config:
 
     # Default values
     defaults = {
+        "db_path": "data.db",
+        "network_mode": False,
+        "server_url": "http://localhost:8080",
         "mouse_sensitivity": 1.0,
         "movement_speed": 10.0,
         "player_height": 1.5,
@@ -69,7 +72,6 @@ class Config:
         "draw_compass": True,
         "compass_scale": 1.0,
         "draw_stats": True,
-        "db_path": "data.db",
         "spawn_mode": "saved",   # "saved", "random", "portal"
         "random_spawn_range": 500,
         "camera_mode": 0,

@@ -1,13 +1,12 @@
 import numpy
 import re
 import sqlite3
-
+import json
 from logger import logging
 
 
 class Serializer:
     def __init__(self, db_path):
-        # Allowed tables – add more as needed
         self.allowed_tables = {'player', 'chunks', 'healthes', 'mobs'}
         self.db_path = db_path
         self._init_db()
@@ -15,7 +14,6 @@ class Serializer:
     def _init_db(self):
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            # Player stats table
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS player (
                     id INTEGER PRIMARY KEY,
@@ -36,17 +34,18 @@ class Serializer:
                     familiar_name TEXT
                 )
             ''')
-            # table for chunks
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS chunks (
+                    portal INTEGER DEFAULT 0,
                     cx INTEGER,
                     cz INTEGER,
                     vertices BLOB,
                     indices BLOB,
+                    stones BLOB,
+                    trees BLOB,
                     PRIMARY KEY (cx, cz)
                 )
             ''')
-            # table for healthes
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS healthes (
                     cx INTEGER,
@@ -55,18 +54,8 @@ class Serializer:
                     PRIMARY KEY (cx, cz)
                 )
             ''')
-            # table for mobs
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS mobs (
-                    cx INTEGER,
-                    cz INTEGER,
-                    data BLOB,
-                    PRIMARY KEY (cx, cz)
-                )
-            ''')
-            # table for trees
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS trees (
                     cx INTEGER,
                     cz INTEGER,
                     data BLOB,
@@ -76,21 +65,16 @@ class Serializer:
             conn.commit()
 
     def update(self, table, fields, values, where="id = 1"):
-        """
-        Generic update for any table.
-        - table: string, table name (must be in allowed list)
-        - fields: tuple/list of column names
-        - values: tuple/list of corresponding values
-        - where: optional WHERE clause (default "id = 1")
-        """
         if table not in self.allowed_tables:
             logging.error(f"Table '{table}' not allowed for update")
+            return
         if len(fields) != len(values):
             logging.error("Fields and values length mismatch")
-        for col in fields: # Sanitize column names – only alphanumeric + underscore
+            return
+        for col in fields:
             if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', col):
                 logging.error(f"Invalid column name: {col}")
-        # Build SET clause safely
+                return
         set_clause = ", ".join(f"{col} = ?" for col in fields)
         query = f"UPDATE {table} SET {set_clause} WHERE {where}"
         with sqlite3.connect(self.db_path) as conn:
@@ -139,38 +123,63 @@ class Serializer:
                 }
             return None
 
-    def save_chunk(self, cx, cz, vertices, indices):
-        """Save chunk geometry as binary blobs."""
+    def clear_chunks(self, portal=False):
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''DELETE FROM chunks WHERE portal = ?''', (1 if portal else 0, ))
+            conn.commit()
+
+    def save_chunk(self, portal, cx, cz, vertices, indices, stones, trees):
         vertices_bytes = vertices.tobytes()
         indices_bytes = indices.tobytes()
+        rounded_stones = []
+        for s in stones:
+            rounded_stones.append({
+                'x': round(s['x'], 1),
+                'y': round(s['y'], 1),
+                'z': round(s['z'], 1),
+                'trunk_height': round(s.get('trunk_height', 1.5), 1),
+                'foliage_radius': round(s.get('foliage_radius', 0.6), 1),
+                'rotation_y': round(s.get('rotation_y', 0), 1)
+            })
+        rounded_trees = []
+        for t in trees:
+            rounded_trees.append({
+                'x': round(t['x'], 1),
+                'y': round(t['y'], 1),
+                'z': round(t['z'], 1),
+                'trunk_height': round(t.get('trunk_height', 1.5), 1),
+                'foliage_radius': round(t.get('foliage_radius', 0.6), 1),
+                'rotation_y': round(t.get('rotation_y', 0), 1)
+            })
+        stones_json = json.dumps(rounded_stones).encode('utf-8')
+        trees_json = json.dumps(rounded_trees).encode('utf-8')
+        portal_int = 1 if portal else 0
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT OR REPLACE INTO chunks (cx, cz, vertices, indices)
-                VALUES (?, ?, ?, ?)
-            ''', (cx, cz, vertices_bytes, indices_bytes))
+                INSERT OR REPLACE INTO chunks (portal, cx, cz, vertices, indices, stones, trees)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (portal_int, cx, cz, vertices_bytes, indices_bytes, stones_json, trees_json))
             conn.commit()
 
     def load_chunk(self, cx, cz):
-        """Load chunk geometry; returns (vertices, indices) or (None, None)."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
-            cursor.execute('SELECT vertices, indices FROM chunks WHERE cx = ? AND cz = ?', (cx, cz))
+            cursor.execute('SELECT portal, vertices, indices, stones, trees FROM chunks WHERE cx = ? AND cz = ?', (cx, cz))
             row = cursor.fetchone()
             if row:
-                vertices_bytes, indices_bytes = row
-                # Reconstruct numpy arrays (assuming float32 for vertices, uint32 for indices)
-                # Vertex count = total bytes / (4 bytes per float * 6 floats per vertex)
+                portal, vertices_bytes, indices_bytes, stones_json, trees_json = row
                 num_vertices = len(vertices_bytes) // (4 * 6)
                 vertices = numpy.frombuffer(vertices_bytes, dtype=numpy.float32).reshape(num_vertices, 6)
                 num_indices = len(indices_bytes) // 4
                 indices = numpy.frombuffer(indices_bytes, dtype=numpy.uint32).reshape(num_indices)
-                return vertices, indices
-            return None, None
+                stones = json.loads(stones_json.decode('utf-8'))
+                trees = json.loads(trees_json.decode('utf-8'))
+                return bool(portal), vertices, indices, stones, trees
+            return False, None, None, None, None
 
     def save_mobs(self, cx, cz, mobs_data):
-        """Save list of mob dictionaries for a chunk as JSON."""
-        import json
         json_str = json.dumps(mobs_data)
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
@@ -181,8 +190,6 @@ class Serializer:
             conn.commit()
 
     def load_mobs(self, cx, cz):
-        """Load list of mob dictionaries for a chunk, or None if none."""
-        import json
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('SELECT data FROM mobs WHERE cx = ? AND cz = ?', (cx, cz))
@@ -192,8 +199,6 @@ class Serializer:
             return None
 
     def save_health(self, cx, cz, cube_dict):
-        """Save a health dict for a chunk, or delete if None."""
-        import json
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             if cube_dict is None:
@@ -207,37 +212,9 @@ class Serializer:
             conn.commit()
 
     def load_health(self, cx, cz):
-        """Load health dict for a chunk, or None if missing."""
-        import json
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('SELECT data FROM healthes WHERE cx = ? AND cz = ?', (cx, cz))
-            row = cursor.fetchone()
-            if row:
-                return json.loads(row[0])
-            return None
-
-    def save_trees(self, cx, cz, trees_data):
-        """Save list of tree dictionaries for a chunk as JSON, or delete if None."""
-        import json
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            if trees_data is None:
-                cursor.execute('DELETE FROM trees WHERE cx = ? AND cz = ?', (cx, cz))
-            else:
-                json_str = json.dumps(trees_data)
-                cursor.execute('''
-                    INSERT OR REPLACE INTO trees (cx, cz, data)
-                    VALUES (?, ?, ?)
-                ''', (cx, cz, json_str))
-            conn.commit()
-
-    def load_trees(self, cx, cz):
-        """Load list of tree dictionaries for a chunk, or None if missing."""
-        import json
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT data FROM trees WHERE cx = ? AND cz = ?', (cx, cz))
             row = cursor.fetchone()
             if row:
                 return json.loads(row[0])

@@ -123,15 +123,22 @@ class Camera:
             self.pitch = 0.0
         self.update_vectors()
 
-    def process_keyboard(self, keys, dt, forward=None):
-        """Movement handling for both modes."""
-        if self.mode == 1:
-            # Third‑person: move the player relative to camera direction
+    def process_keyboard(self, keys, dt, forward=None, speed_multiplier=1.0):
+        """Movement handling for all modes."""
+        if self.mode == 1: # Third‑person: move the player relative to camera direction
             cam_right = numpy.cross(forward, numpy.array([0, 1, 0]))
             if numpy.linalg.norm(cam_right) > 0:
                 cam_right /= numpy.linalg.norm(cam_right)
-            speed = self.movement_speed * dt
+            speed = self.movement_speed * dt * speed_multiplier
             move = numpy.array([0.0, 0.0, 0.0])
+            if self.player.movement.get('w', False):
+                move += forward
+            if self.player.movement.get('s', False):
+                move -= forward
+            if self.player.movement.get('a', False):
+                move -= cam_right
+            if self.player.movement.get('d', False):
+                move += cam_right
             if keys.get(glfw.KEY_W, False):
                 move += forward
             if keys.get(glfw.KEY_S, False):
@@ -145,9 +152,10 @@ class Camera:
             new_pos = numpy.array(self.player.position) + move * speed
             new_pos[1] = get_height(new_pos[0], new_pos[2])
             self.player.position = tuple(new_pos)
-        else:
-            # First‑person: move the camera, player follows
-            speed = self.movement_speed * dt
+        else: # First‑person: move the camera, player follows
+            speed = self.movement_speed * dt * speed_multiplier
+            if self.player.movement.get('w', False):
+                self.position += self.front * speed
             if keys.get(glfw.KEY_W, False):
                 self.position += self.front * speed
             if keys.get(glfw.KEY_S, False):
@@ -200,7 +208,7 @@ class Camera:
         y = get_height(x, z)
         return numpy.array([x, y, z])
 
-    def update(self, keys, dt):
+    def update(self, keys, dt, speed_multiplier=1.0):
         view, forward = None, None
         if self.mode == 1:
             # Third‑person: camera orbits around the player
@@ -224,9 +232,9 @@ class Camera:
             if numpy.linalg.norm(cam_dir_horiz) > 0:
                 cam_dir_horiz /= numpy.linalg.norm(cam_dir_horiz)
             forward = -cam_dir_horiz
-            self.process_keyboard(keys, dt, forward)
+            self.process_keyboard(keys, dt, forward, speed_multiplier)
         else:
             # First‑person: camera moves itself, player follows
-            self.process_keyboard(keys, dt)
+            self.process_keyboard(keys, dt, speed_multiplier=speed_multiplier)
             view = self.get_view_matrix()
         return view, forward

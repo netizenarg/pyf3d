@@ -1,9 +1,10 @@
 import glfw
-from OpenGL.GL import *
-from OpenGL.GL.shaders import compileProgram, compileShader
 import numpy
 
-from font import FONT_BITMAPS
+from OpenGL.GL import *
+from OpenGL.GL.shaders import compileProgram, compileShader
+
+from gui.font import FONT_BITMAPS
 from shaders.gui_shdr import TEXT_VERTEX_SHADER, TEXT_FRAGMENT_SHADER
 
 
@@ -114,8 +115,6 @@ class FPSOverlay:
         glBindVertexArray(self.quad_vao)
         for i, ch in enumerate(text):
             code = ord(ch)
-            if 97 <= code <= 122:  # uppercase
-                code -= 32
             if code < 32 or code > 127:
                 continue
             idx = code - 32

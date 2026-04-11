@@ -1,10 +1,11 @@
 import numpy
 import ctypes
+
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 
 from shaders.gui_shdr import *
-from font import FONT_BITMAPS
+from gui.font import FONT_BITMAPS
 
 
 class StatsPanel:
@@ -204,7 +205,7 @@ class StatsPanel:
                 text = str(text)
                 if text:
                     y_center = y + self.row_height // 2 - self.char_size // 2
-                    self._draw_text(text, x + self.cell_padding, y_center, self.char_size, uppercase=True)
+                    self._draw_text(text, x + self.cell_padding, y_center, self.char_size)
                 x += col_widths[col]
             y += self.row_height
 
@@ -219,7 +220,7 @@ class StatsPanel:
         glDrawElements(GL_TRIANGLES, self.quad_index_count, GL_UNSIGNED_INT, None)
         glBindVertexArray(0)
 
-    def _draw_text(self, text, x, y, size, uppercase=True):
+    def _draw_text(self, text, x, y, size, uppercase=False):
         glBindVertexArray(self.quad_vao)
         for i, ch in enumerate(text):
             code = ord(ch)

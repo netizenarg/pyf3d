@@ -25,13 +25,14 @@ import ctypes
 from shaders.shader import Shader
 from shaders.terrain_shdr import VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC
 
+from bbox import BoundingBox
 from camera import get_height
 from config import Config
 from media.audio import Audio
-from gui import Menu
-from gui_stats import StatsPanel
-from gui_fps import FPSOverlay
-from compass import Compass
+from gui.settings import DialogSettings
+from gui.stats import StatsPanel
+from gui.fps import FPSOverlay
+from gui.compass import Compass
 from camera import Camera
 from chunks import ChunkManager
 from stones import StoneManager
@@ -40,6 +41,7 @@ from target import Target
 from sky import Sky
 from player import Player
 from player_model import PlayerModel
+from player_ai import PlayerAI
 from health import HealthManager
 from mobs import get_aimed_mob, MobManager
 from weapon import BaseAmmo, Ammo, Weapon
@@ -89,6 +91,7 @@ def main():
     mouse_sensitivity = config["mouse_sensitivity"]
     movement_speed = config["movement_speed"]
     player_height = config["player_height"]
+    auto_play = config.get("auto_play", False)
     terrain_spacing = config["terrain_spacing"]
     chunk_size = config["chunk_size"]
     load_radius = config["load_radius"]
@@ -147,6 +150,8 @@ def main():
     glViewport(0, 0, screen.width, screen.height)
     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
     glEnable(GL_DEPTH_TEST)
+
+    bounding_box = BoundingBox()
 
     camera = Camera(player=player, mode=camera_mode,
                     mouse_sensitivity=mouse_sensitivity,
@@ -231,10 +236,12 @@ def main():
     player.set_weapon(weapon)
     ammo_list = [] # Create a list for active ammo
 
+    player_ai = PlayerAI(player, camera, mob_manager, health_manager, loot_manager, weapon, auto_play)
+
     compass = Compass(screen.width, screen.height, camera, draw_compass, compass_scale)
     stats_panel = StatsPanel(screen.width, screen.height, draw_stats)
     fps_overlay = FPSOverlay(screen.width, screen.height, config.get("show_fps", False))
-    menu = Menu(window, screen.width, screen.height, config, camera, player, stats_panel, fps_overlay, compass)
+    dialog_settings = DialogSettings(window, screen.width, screen.height, config, camera, player, stats_panel, fps_overlay, compass)
 
     def resize_callback(window, width, height):
         nonlocal proj
@@ -243,7 +250,7 @@ def main():
         glViewport(0, 0, width, height)
         stats_panel.resize(width, height)
         compass.resize(width, height)
-        menu.resize(width, height)
+        dialog_settings.resize(width, height)
         proj = compute_projection(width, height)
 
     glfw.set_window_size_callback(window, resize_callback)
@@ -257,9 +264,16 @@ def main():
                 glfw.set_window_should_close(window, True)
         elif action == glfw.PRESS:
             keys[key] = True
-            if key == glfw.KEY_F9:
-                menu.active = not menu.active
-                if menu.active:
+            if key == glfw.KEY_F3:
+                bounding_box.enabled = not bounding_box.enabled
+            elif key == glfw.KEY_F4:
+                enabled = player_ai.toggle()
+                logging.info(f"Auto-play mode {'enabled' if enabled else 'disabled'}")
+                config["auto_play"] = enabled
+                Config.save(config)
+            elif key == glfw.KEY_F9:
+                dialog_settings.active = not dialog_settings.active
+                if dialog_settings.active:
                     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_NORMAL)
                 else:
                     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
@@ -321,9 +335,9 @@ def main():
                     target.active = True
                     break
             if button == glfw.MOUSE_BUTTON_LEFT:
-                if menu.active:
+                if dialog_settings.active:
                     xpos, ypos = glfw.get_cursor_pos(window)
-                    menu.handle_mouse(xpos, ypos, button)
+                    dialog_settings.handle_mouse(xpos, ypos, button)
                     return
                 ammo = player.shoot('left', weapon_pos, ray_dir, glfw.get_time())
                 if ammo:
@@ -342,7 +356,7 @@ def main():
 
     def mouse_callback(window, xpos, ypos):
         nonlocal last_x, last_y, first_mouse
-        if menu.active:
+        if dialog_settings.active:
             return
         if first_mouse:
             last_x = xpos
@@ -365,7 +379,8 @@ def main():
         dt = current_time - last_time
         last_time = current_time
 
-        view, forward = camera.update(keys, dt)
+        speed_mult = 0.5 if player_ai.enabled else 1.0
+        view, forward = camera.update(keys, dt, speed_mult)
 
         # ----- Update world (chunks, sky, etc.) -----
         chunk_manager.update(camera.position)
@@ -399,6 +414,9 @@ def main():
                     break
 
         player.speed = numpy.linalg.norm(numpy.array(player.position) - prev_player_pos) / dt if dt > 0 else 0.0
+
+        if player_ai.enabled:
+            player_ai.update(dt, current_time)
 
         if stats_panel.enabled:
             stats_panel.update(
@@ -465,6 +483,31 @@ def main():
 
         sky.draw_foreground(view, proj, camera.position, glfw.get_time())
 
+        if bounding_box.enabled:
+            if camera.mode == 1:
+                player_center = (player.position[0], player.position[1] + 0.8, player.position[2])
+                bounding_box.draw(player_center, (0.8, 1.6, 0.8), view, proj, (0,1,0))
+            for mobs in mob_manager.active_mobs.values():
+                for mob in mobs:
+                    mob_center = (mob.position[0], mob.position[1] + 0.4, mob.position[2])
+                    bounding_box.draw(mob_center, (0.8, 0.8, 0.8), view, proj, (1,0,0))
+            for item in health_manager.active_items.values():
+                if not item.collected:
+                    center = item.get_world_position()
+                    size = item.size
+                    bounding_box.draw(center, (size, size, size), view, proj, (1, 1, 0))
+            for item in loot_manager.loot_items:
+                if hasattr(item, 'collected') and item.collected:
+                    continue
+                if hasattr(item, 'active') and not item.active:
+                    continue
+                if hasattr(item, 'get_world_position'):
+                    center = item.get_world_position()
+                else:
+                    center = item.position
+                size = getattr(item, 'size', 0.8)
+                bounding_box.draw(center, (size, size, size), view, proj, (1, 1, 0))
+
         # Crosshair
         glDisable(GL_DEPTH_TEST)
         shader_crosshair.use()
@@ -476,7 +519,7 @@ def main():
 
         compass.draw()
         stats_panel.draw()
-        menu.draw()
+        dialog_settings.draw()
         fps_overlay.draw(dt)
 
         glfw.swap_buffers(window)

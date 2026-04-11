@@ -92,6 +92,9 @@ class FlyingPart:
 
 
 class Mob:
+
+    COLLISION_RADIUS = 0.6
+
     def __init__(self, position, chunk_cx, chunk_cz, speed=1.5, follow_range=8.0,
                  attack_range=2.0, damage=5, npc_type="basic"):
         self.position = numpy.array(position, dtype=float)
@@ -110,10 +113,21 @@ class Mob:
     def update(self, dt, player_pos, phys_size):
         dx = player_pos[0] - self.position[0]
         dz = player_pos[2] - self.position[2]
-        dist_sq = dx*dx + dz*dz
-        # Only move if within follow_range * 1.5
-        if dist_sq < (self.follow_range * 1.5) ** 2 and dist_sq > 0.01:
-            dist = math.sqrt(dist_sq)
+        dist = math.hypot(dx, dz)
+        if dist < self.COLLISION_RADIUS:
+            if dist > 0.01: # push away from player
+                push_dir_x = -dx / dist
+                push_dir_z = -dz / dist
+            else:
+                push_dir_x, push_dir_z = 1.0, 0.0
+            push = self.speed * dt * 0.5
+            self.position[0] += push_dir_x * push
+            self.position[2] += push_dir_z * push
+            new_cx = int(self.position[0] // phys_size)
+            new_cz = int(self.position[2] // phys_size)
+            self.position[1] = get_height(self.position[0], self.position[2]) + 0.5
+            return new_cx, new_cz
+        if dist < (self.follow_range * 1.5) and dist > 0.5:
             move = numpy.array([dx / dist, 0.0, dz / dist]) * self.speed * dt
             new_pos = self.position + move
             new_pos[1] = get_height(new_pos[0], new_pos[2]) + 0.5

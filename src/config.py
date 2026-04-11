@@ -2,6 +2,7 @@ import logging
 import json
 import os
 
+
 DEFAULT_LOG_CONFIG = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -50,6 +51,7 @@ DEFAULT_LOG_CONFIG = {
     }
 }
 
+
 class Config:
     CONFIG_FILE = "config.json"
 
@@ -61,6 +63,7 @@ class Config:
         "mouse_sensitivity": 1.0,
         "movement_speed": 10.0,
         "player_height": 1.5,
+        "auto_play": False,
         "terrain_spacing": 1.0,
         "chunk_size": 16,
         "load_radius": 1,

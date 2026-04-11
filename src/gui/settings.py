@@ -311,7 +311,7 @@ class DialogSettings:
             color = (0.4,0.6,0.9,0.9) if i == self.active_tab_index else (0.5,0.5,0.5,0.7)
             self._draw_rect(tab_x, header_y, tab_w, header_h, color)
             self._draw_text(tab.name, tab_x + 10, header_y + (header_h - 12)//2, 12,
-                            color=(1,1,1,1), uppercase=True)
+                            color=(1,1,1,1))
             tab_x += tab_w + 5
 
         # Draw active tab widgets
@@ -322,19 +322,19 @@ class DialogSettings:
         sx, sy, sw, sh, _ = self.save_button
         self._draw_rect(sx, sy, sw, sh, (0.5,0.5,0.5,0.9))
         self._draw_text("Save", sx + (sw - 4*12)//2, sy + (sh - 12)//2, 12,
-                        color=(1,1,1,1), uppercase=True)
+                        color=(1,1,1,1))
 
         # Title text
         title_width = len(self.title_text) * 12
         title_x = self.panel_x + (self.panel_w - title_width) // 2
         title_center_y = self.panel_y + (self.title_height - 12) // 2
         self._draw_text(self.title_text, title_x, title_center_y, 12,
-                        color=(1,1,1,1), uppercase=True)
+                        color=(1,1,1,1))
 
         # Close button text
         cx, cy, cw, ch, _ = self.close_button
         self._draw_text("X", cx + (cw - 12)//2, cy + (ch - 12)//2, 12,
-                        color=(1,1,1,1), uppercase=True)
+                        color=(1,1,1,1))
 
         glDisable(GL_BLEND)
         glEnable(GL_DEPTH_TEST)
@@ -351,7 +351,7 @@ class DialogSettings:
         glDrawElements(GL_TRIANGLES, self.quad_index_count, GL_UNSIGNED_INT, None)
         glBindVertexArray(0)
 
-    def _draw_text(self, text, x, y, size, color=(1,1,1,1), uppercase=True):
+    def _draw_text(self, text, x, y, size, color=(1,1,1,1), uppercase=False):
         """Draw text with given color, top‑origin coordinates, y is baseline (center)."""
         glUseProgram(self.text_shader)
         glUniform2f(self.text_uScreenSize, self.width, self.height)

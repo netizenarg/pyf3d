@@ -19,8 +19,7 @@ class CheckBox(Widget):
         # Label
         label_x = x + box_size + 5
         label_y = y + (h - 12) // 2
-        widget._draw_text(self.label, label_x, label_y, 12,
-                        color=(1, 1, 1, 1), uppercase=True)
+        widget._draw_text(self.label, label_x, label_y, 12, color=(1, 1, 1, 1))
 
     def handle_mouse(self, x, y, widget):
         rx, ry, rw, rh = self.rect

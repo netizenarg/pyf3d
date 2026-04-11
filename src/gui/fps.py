@@ -115,8 +115,6 @@ class FPSOverlay:
         glBindVertexArray(self.quad_vao)
         for i, ch in enumerate(text):
             code = ord(ch)
-            if 97 <= code <= 122:  # uppercase
-                code -= 32
             if code < 32 or code > 127:
                 continue
             idx = code - 32

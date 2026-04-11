@@ -237,11 +237,13 @@ def main():
     ammo_list = [] # Create a list for active ammo
 
     player_ai = PlayerAI(player, camera, mob_manager, health_manager, loot_manager, weapon, auto_play)
+    player_ai.set_ammo_list(ammo_list)
 
     compass = Compass(screen.width, screen.height, camera, draw_compass, compass_scale)
     stats_panel = StatsPanel(screen.width, screen.height, draw_stats)
     fps_overlay = FPSOverlay(screen.width, screen.height, config.get("show_fps", False))
-    dialog_settings = DialogSettings(window, screen.width, screen.height, config, camera, player, stats_panel, fps_overlay, compass)
+    dialog_settings = DialogSettings(window, screen.width, screen.height, config, camera,
+                                     player, stats_panel, fps_overlay, compass, player_ai)
 
     def resize_callback(window, width, height):
         nonlocal proj
@@ -485,12 +487,16 @@ def main():
 
         if bounding_box.enabled:
             if camera.mode == 1:
-                player_center = (player.position[0], player.position[1] + 0.8, player.position[2])
-                bounding_box.draw(player_center, (0.8, 1.6, 0.8), view, proj, (0,1,0))
+                #player_center = (player.position[0], player.position[1] + 0.8, player.position[2])
+                #bounding_box.draw(player_center, (0.8, 1.6, 0.8), view, proj, (0,1,0))
+                player_center = (player.position[0], player.position[1] + 0.6, player.position[2])
+                bounding_box.draw(player_center, (1.2, 1.2, 1.2), view, proj, (0,1,0))
             for mobs in mob_manager.active_mobs.values():
                 for mob in mobs:
-                    mob_center = (mob.position[0], mob.position[1] + 0.4, mob.position[2])
-                    bounding_box.draw(mob_center, (0.8, 0.8, 0.8), view, proj, (1,0,0))
+                    #mob_center = (mob.position[0], mob.position[1] + 0.4, mob.position[2])
+                    #bounding_box.draw(mob_center, (0.8, 0.8, 0.8), view, proj, (1,0,0))
+                    mob_center = (mob.position[0], mob.position[1] + 0.6, mob.position[2])
+                    bounding_box.draw(mob_center, (1.2, 1.2, 1.2), view, proj, (1,0,0))
             for item in health_manager.active_items.values():
                 if not item.collected:
                     center = item.get_world_position()

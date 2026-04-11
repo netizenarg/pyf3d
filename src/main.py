@@ -25,6 +25,7 @@ import ctypes
 from shaders.shader import Shader
 from shaders.terrain_shdr import VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC
 
+from bbox import BoundingBox
 from camera import get_height
 from config import Config
 from media.audio import Audio
@@ -148,6 +149,8 @@ def main():
     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
     glEnable(GL_DEPTH_TEST)
 
+    bounding_box = BoundingBox()
+
     camera = Camera(player=player, mode=camera_mode,
                     mouse_sensitivity=mouse_sensitivity,
                     movement_speed=movement_speed)
@@ -257,7 +260,9 @@ def main():
                 glfw.set_window_should_close(window, True)
         elif action == glfw.PRESS:
             keys[key] = True
-            if key == glfw.KEY_F9:
+            if key == glfw.KEY_F3:
+                bounding_box.enabled = not bounding_box.enabled
+            elif key == glfw.KEY_F9:
                 dialog_settings.active = not dialog_settings.active
                 if dialog_settings.active:
                     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_NORMAL)
@@ -464,6 +469,31 @@ def main():
             ammo.draw(view, proj)
 
         sky.draw_foreground(view, proj, camera.position, glfw.get_time())
+
+        if bounding_box.enabled:
+            if camera.mode == 1:
+                player_center = (player.position[0], player.position[1] + 0.8, player.position[2])
+                bounding_box.draw(player_center, (0.8, 1.6, 0.8), view, proj, (0,1,0))
+            for mobs in mob_manager.active_mobs.values():
+                for mob in mobs:
+                    mob_center = (mob.position[0], mob.position[1] + 0.4, mob.position[2])
+                    bounding_box.draw(mob_center, (0.8, 0.8, 0.8), view, proj, (1,0,0))
+            for item in health_manager.active_items.values():
+                if not item.collected:
+                    center = item.get_world_position()
+                    size = item.size
+                    bounding_box.draw(center, (size, size, size), view, proj, (1, 1, 0))
+            for item in loot_manager.loot_items:
+                if hasattr(item, 'collected') and item.collected:
+                    continue
+                if hasattr(item, 'active') and not item.active:
+                    continue
+                if hasattr(item, 'get_world_position'):
+                    center = item.get_world_position()
+                else:
+                    center = item.position
+                size = getattr(item, 'size', 0.8)
+                bounding_box.draw(center, (size, size, size), view, proj, (1, 1, 0))
 
         # Crosshair
         glDisable(GL_DEPTH_TEST)

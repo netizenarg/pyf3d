@@ -28,9 +28,12 @@ class Serializer:
                     level INTEGER,
                     life INTEGER,
                     mana INTEGER,
-                    weapon_name TEXT,
-                    ammo_count INTEGER,
+                    weapon_left INTEGER DEFAULT -1,
+                    weapon_right INTEGER DEFAULT 0,
+                    ammo_left INTEGER DEFAULT 0,
+                    ammo_right INTEGER DEFAULT -1,
                     killed_mobs INTEGER,
+                    bag TEXT,
                     familiar_name TEXT
                 )
             ''')
@@ -88,13 +91,14 @@ class Serializer:
             cursor.execute('''
                 INSERT OR REPLACE INTO player
                 (id, pos_x, pos_y, pos_z, portal_x, portal_y, portal_z,
-                height, speed, level, life, mana, weapon_name,
-                ammo_count, killed_mobs, familiar_name)
+                 height, speed, level, life, mana,
+                 weapon_left, weapon_right, ammo_left, ammo_right,
+                 killed_mobs, bag, familiar_name)
                 VALUES (1, :pos_x, :pos_y, :pos_z,
                         :portal_x, :portal_y, :portal_z,
                         :height, :speed, :level, :life, :mana,
-                        :weapon_name, :ammo_count, :killed_mobs,
-                        :familiar_name)
+                        :weapon_left, :weapon_right, :ammo_left, :ammo_right,
+                        :killed_mobs, :bag, :familiar_name)
             ''', player_data)
 
     def load_player(self):
@@ -116,9 +120,12 @@ class Serializer:
                     'level': row['level'],
                     'life': row['life'],
                     'mana': row['mana'],
-                    'weapon_name': row['weapon_name'],
-                    'ammo_count': row['ammo_count'],
+                    'weapon_left': row['weapon_left'],
+                    'weapon_right': row['weapon_right'],
+                    'ammo_left': row['ammo_left'],
+                    'ammo_right': row['ammo_right'],
                     'killed_mobs': row['killed_mobs'],
+                    'bag': row['bag'],
                     'familiar_name': row['familiar_name']
                 }
             return None

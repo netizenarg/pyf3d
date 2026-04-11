@@ -1,68 +1,29 @@
 import numpy
 import math
 import random
-from OpenGL.GL import *
 import ctypes
+import logging
+
+from OpenGL.GL import *
 
 from camera import get_height
 from shaders.shader import Shader
 from shaders.health_shdr import HEALTH_VERTEX_SHADER_SRC, HEALTH_FRAGMENT_SHADER_SRC
+from loot import Loot
 
 
-class HealthCube:
-    """Health pickup that rotates and bobs above terrain."""
-    def __init__(self, position, chunk_cx, chunk_cz):
-        self.position = numpy.array(position, dtype=float)
-        self.chunk_cx = chunk_cx
-        self.chunk_cz = chunk_cz
-        self.size = 0.8
-        self.rotation_angle = 0.0
-        self.bob_offset = 0.0
-        self.collected = False
-        self.restore_value = 10
-
-    def update(self, dt, elapsed_time):
-        """Update rotation and bobbing animation."""
-        self.rotation_angle += 90.0 * dt  # degrees per second
-        if self.rotation_angle > 360.0:
-            self.rotation_angle -= 360.0
-        self.bob_offset = math.sin(elapsed_time * 2.0) * 0.15
-
-    def get_world_position(self):
-        """Return position with vertical bob offset."""
-        return self.position + numpy.array([0.0, self.bob_offset, 0.0])
-
-    def to_dict(self):
-        return {
-            'pos_x': self.position[0],
-            'pos_y': self.position[1],
-            'pos_z': self.position[2],
-            'restore_value': self.restore_value
-        }
-
-    @classmethod
-    def from_dict(cls, data, chunk_cx, chunk_cz):
-        cube = cls(
-            position=(data['pos_x'], data['pos_y'], data['pos_z']),
-            chunk_cx=chunk_cx,
-            chunk_cz=chunk_cz
-        )
-        cube.restore_value = data.get('restore_value', 10.0)
-        return cube
-
-
-class HealthCubeModel:
-    """Drawable model for a health cube with red cross on white faces."""
+class HealthModel:
+    """Drawable model for a health with red cross on white faces."""
     def __init__(self, shader: Shader):
         self.shader = shader
         self.vao = glGenVertexArrays(1)
         self.vbo = glGenBuffers(1)
         self.ebo = glGenBuffers(1)
-        self._build_cube_with_texcoords()
+        self._build_with_texcoords()
         self._setup_buffers()
         self.texture = self._create_cross_texture()
 
-    def _build_cube_with_texcoords(self):
+    def _build_with_texcoords(self):
         # 8 vertices each with position (3) and texcoord (2)
         # Order: front, back, left, right, top, bottom
         vertices = numpy.array([
@@ -116,22 +77,22 @@ class HealthCubeModel:
         size = 64
         tex_data = numpy.zeros((size, size, 3), dtype=numpy.uint8)
         tex_data[:, :] = [255, 255, 255]  # white background
-        
+
         # Cross dimensions: 3/4 of the texture size -> 48x48 area
         cross_size = int(size * 0.75)  # 48
         start = (size - cross_size) // 2  # 8
         end = start + cross_size          # 56
-        
+
         bar_width = 12  # thickness of cross arms
         bar_start = start + (cross_size - bar_width) // 2
         bar_end = bar_start + bar_width
-        
+
         # Draw red cross within the centered square
         # Horizontal bar (full width within the cross area)
         tex_data[bar_start:bar_end, start:end] = [255, 0, 0]
         # Vertical bar (full height within the cross area)
         tex_data[start:end, bar_start:bar_end] = [255, 0, 0]
-        
+
         tex_id = glGenTextures(1)
         glBindTexture(GL_TEXTURE_2D, tex_id)
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, size, size, 0, GL_RGB, GL_UNSIGNED_BYTE, tex_data)
@@ -156,14 +117,14 @@ class HealthCubeModel:
 
         glBindVertexArray(0)
 
-    def draw(self, cube, view, projection, light_dir, light_intensity):
-        """Draw the health cube with rotation and bobbing (no update inside)."""
-        if cube.collected:
+    def draw(self, parent, view, projection, light_dir, light_intensity):
+        """Draw the health with rotation and bobbing (no update inside)."""
+        if parent.collected:
             return
 
-        pos = cube.get_world_position()
-        angle = cube.rotation_angle
-        size = cube.size
+        pos = parent.get_world_position()
+        angle = parent.rotation_angle
+        size = parent.size
 
         glUseProgram(self.shader.program)
         self.shader.set_mat4("uView", view)
@@ -206,8 +167,106 @@ class HealthCubeModel:
         glBindVertexArray(0)
 
 
+class Health:
+    """Health pickup that rotates and bobs above terrain."""
+    def __init__(self, position, chunk_cx, chunk_cz):
+        self.position = numpy.array(position, dtype=float)
+        self.chunk_cx = chunk_cx
+        self.chunk_cz = chunk_cz
+        self.size = 0.8
+        self.rotation_angle = 0.0
+        self.bob_offset = 0.0
+        self.collected = False
+        self.restore_value = 10
+
+    def update(self, dt, elapsed_time):
+        """Update rotation and bobbing animation."""
+        self.rotation_angle += 90.0 * dt  # degrees per second
+        if self.rotation_angle > 360.0:
+            self.rotation_angle -= 360.0
+        self.bob_offset = math.sin(elapsed_time * 2.0) * 0.15
+
+    def get_world_position(self):
+        """Return position with vertical bob offset."""
+        return self.position + numpy.array([0.0, self.bob_offset, 0.0])
+
+    def to_dict(self):
+        return {
+            'pos_x': self.position[0],
+            'pos_y': self.position[1],
+            'pos_z': self.position[2],
+            'restore_value': self.restore_value
+        }
+
+    @classmethod
+    def from_dict(cls, data, chunk_cx, chunk_cz):
+        this = cls(
+            position=(data['pos_x'], data['pos_y'], data['pos_z']),
+            chunk_cx=chunk_cx,
+            chunk_cz=chunk_cz
+        )
+        this.restore_value = data.get('restore_value', 10.0)
+        return this
+
+
+class BigHealthModel(HealthModel):
+    def _create_cross_texture(self):
+        size = 64
+        tex_data = numpy.zeros((size, size, 3), dtype=numpy.uint8)
+        tex_data[:, :] = [255, 255, 255]
+        gold = [255, 215, 0]
+        cross_size = int(size * 0.75)
+        start = (size - cross_size) // 2
+        end = start + cross_size
+        bar_width = 12
+        bar_start = start + (cross_size - bar_width) // 2
+        bar_end = bar_start + bar_width
+        tex_data[bar_start:bar_end, start:end] = gold
+        tex_data[start:end, bar_start:bar_end] = gold
+        tex_id = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, tex_id)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, size, size, 0, GL_RGB, GL_UNSIGNED_BYTE, tex_data)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glBindTexture(GL_TEXTURE_2D, 0)
+        return tex_id
+
+
+class BigHealth(Health, Loot):
+    def __init__(self, position, chunk_cx=0, chunk_cz=0):
+        Health.__init__(self, position, chunk_cx, chunk_cz)
+        Loot.__init__(self, position)
+        self.size = 1.2
+        self.restore_value = 25
+        self.model = BigHealthModel(Shader(HEALTH_VERTEX_SHADER_SRC, HEALTH_FRAGMENT_SHADER_SRC))
+
+    def update(self, dt, elapsed_time=None):
+        # Call Loot.update to decrement pickup timer
+        Loot.update(self, dt)
+        # Animation (independent of elapsed_time)
+        self.rotation_angle += 90.0 * dt
+        if self.rotation_angle > 360.0:
+            self.rotation_angle -= 360.0
+        self.bob_offset = math.sin(self.rotation_angle * 2.0) * 0.15
+
+    def on_pickup(self, player):
+        if player.life >= player.life_max:
+            return False
+        player.life = min(player.life_max, player.life + self.restore_value)
+        return True
+
+    def draw(self, view, proj):
+        #logging.debug(f"collected={self.collected} BigHealth")
+        if self.collected:
+            return
+        #logging.debug(f"Drawing BigHealth at {self.position}")
+        light_dir = numpy.array([1.0, -1.0, 0.0], dtype=float)
+        light_dir = light_dir / numpy.linalg.norm(light_dir)
+        self.model.draw(self, view, proj, light_dir, 1.0)
+
+
 class HealthManager:
-    """Manages health cubes per chunk, loads/saves only at shutdown."""
+    """Manages healthes per chunk, loads/saves only at shutdown."""
     def __init__(self, player, chunk_manager, chunk_size=32, spacing=1.0):
         self.prev_player_pos = None
         self.player = player
@@ -216,14 +275,14 @@ class HealthManager:
         self.chunk_size = chunk_size
         self.spacing = spacing
         self.phys_size = (chunk_size - 1) * spacing
-        self.active_cubes = {}      # (cx, cz) -> HealthCube
+        self.active_items = {}
         self.loaded_chunks = set()
-        self.pending_cubes = {}     # (cx, cz) -> cube dict for unloaded chunks
+        self.pending_items = {}
         self.elapsed_time = 0.0
-        self.cube_model = HealthCubeModel(Shader(HEALTH_VERTEX_SHADER_SRC, HEALTH_FRAGMENT_SHADER_SRC))
+        self.health_model = HealthModel(Shader(HEALTH_VERTEX_SHADER_SRC, HEALTH_FRAGMENT_SHADER_SRC))
 
-    def _generate_cube_for_chunk(self, cx, cz):
-        """Create a health cube at a random location within chunk."""
+    def _generate_for_chunk(self, cx, cz):
+        """Create a health at a random location within chunk."""
         world_min_x = cx * self.phys_size
         world_min_z = cz * self.phys_size
         world_max_x = world_min_x + self.phys_size
@@ -231,29 +290,27 @@ class HealthManager:
         x = random.uniform(world_min_x, world_max_x)
         z = random.uniform(world_min_z, world_max_z)
         y = get_height(x, z) + 0.8   # float above ground
-        cube = HealthCube((x, y, z), cx, cz)
-        return cube
+        return Health((x, y, z), cx, cz)
 
-    def _load_cube_for_chunk(self, cx, cz):
-        """Load cube from DB or generate fresh, merge pending."""
-        cube_data = self.serializer.load_health(cx, cz)
-        pending = self.pending_cubes.pop((cx, cz), None)
+    def _load_for_chunk(self, cx, cz):
+        """Load from DB or generate fresh, merge pending."""
+        data = self.serializer.load_health(cx, cz)
+        pending = self.pending_items.pop((cx, cz), None)
         if pending is not None:
-            cube_data = pending  # pending overrides DB
-        if cube_data is not None:
-            return HealthCube.from_dict(cube_data, cx, cz)
+            data = pending
+        if data is not None:
+            return Health.from_dict(data, cx, cz)
         else:
-            return self._generate_cube_for_chunk(cx, cz)
+            return self._generate_for_chunk(cx, cz)
 
-    def _collect_cube(self, cube, chunk_key):
-        """Helper to apply health restore and remove cube only if health is not full."""
+    def _collect_item(self, item, chunk_key):
+        """Helper to apply health restore and remove only if health is not full."""
         if self.player.life >= self.player.life_max:
             return  # No healing needed, don't collect
-        self.player.life = min(100, self.player.life + cube.restore_value)
-        cube.collected = True
-        del self.active_cubes[chunk_key]
-        self.pending_cubes[chunk_key] = None
-
+        self.player.life = min(100, self.player.life + item.restore_value)
+        item.collected = True
+        del self.active_items[chunk_key]
+        self.pending_items[chunk_key] = None
 
     def update(self, dt):
         self.elapsed_time += dt
@@ -261,62 +318,62 @@ class HealthManager:
         current_chunks = set(self.chunk_manager.chunks.keys())
         for chunk_key in list(self.loaded_chunks): # Unload chunks that are no longer needed
             if chunk_key not in current_chunks:
-                if chunk_key in self.active_cubes:
-                    del self.active_cubes[chunk_key]
+                if chunk_key in self.active_items:
+                    del self.active_items[chunk_key]
                 self.loaded_chunks.discard(chunk_key)
         for chunk_key in current_chunks: # Load new chunks
             if chunk_key not in self.loaded_chunks:
-                cube = self._load_cube_for_chunk(chunk_key[0], chunk_key[1])
-                self.active_cubes[chunk_key] = cube
+                item = self._load_for_chunk(chunk_key[0], chunk_key[1])
+                self.active_items[chunk_key] = item
                 self.loaded_chunks.add(chunk_key)
         # Update animations and check player collision
         player_pos = numpy.array(self.player.position)
         prev_pos = self.prev_player_pos if self.prev_player_pos is not None else player_pos
-        for chunk_key, cube in list(self.active_cubes.items()):
-            if cube.collected: # Already collected (should not happen, but safety)
-                del self.active_cubes[chunk_key]
-                self.pending_cubes[chunk_key] = None
+        for chunk_key, item in list(self.active_items.items()):
+            if item.collected: # Already collected (should not happen, but safety)
+                del self.active_items[chunk_key]
+                self.pending_items[chunk_key] = None
                 continue
-            cube.update(dt, self.elapsed_time)
-            cube_pos = cube.get_world_position()
+            item.update(dt, self.elapsed_time)
+            pos = item.get_world_position()
             # Sphere-sphere collision with current position
-            dist = numpy.linalg.norm(player_pos - cube_pos)
+            dist = numpy.linalg.norm(player_pos - pos)
             if dist < 1.0:  # collision radius (increased)
-                self._collect_cube(cube, chunk_key)
+                self._collect_item(item, chunk_key)
                 continue
             # Continuous collision: check line segment from previous to current player position
             seg_vec = player_pos - prev_pos
             seg_len = numpy.linalg.norm(seg_vec)
             if seg_len > 0.01:
                 seg_dir = seg_vec / seg_len
-                to_cube = cube_pos - prev_pos
-                t = numpy.dot(to_cube, seg_dir)
+                to = pos - prev_pos
+                t = numpy.dot(to, seg_dir)
                 if 0 <= t <= seg_len:
                     closest = prev_pos + seg_dir * t
-                    if numpy.linalg.norm(closest - cube_pos) < 1.0:
-                        self._collect_cube(cube, chunk_key)
+                    if numpy.linalg.norm(closest - pos) < 1.0:
+                        self._collect_item(item, chunk_key)
                         continue
         self.prev_player_pos = player_pos
 
     def draw(self, view, projection, light_dir, light_intensity):
-        """Draw all active cubes."""
-        for cube in self.active_cubes.values():
-            self.cube_model.draw(cube, view, projection, light_dir, light_intensity)
+        """Draw all active items."""
+        for item in self.active_items.values():
+            self.health_model.draw(item, view, projection, light_dir, light_intensity)
 
     def shutdown(self):
-        """Save all active cubes and pending changes to DB."""
-        # Save active cubes
-        for (cx, cz), cube in self.active_cubes.items():
-            if not cube.collected:
-                self.serializer.save_health(cx, cz, cube.to_dict())
+        """Save all active items and pending changes to DB."""
+        # Save active items
+        for (cx, cz), item in self.active_items.items():
+            if not item.collected:
+                self.serializer.save_health(cx, cz, item.to_dict())
         # Apply pending deletions/updates
-        for (cx, cz), cube_dict in self.pending_cubes.items():
-            if cube_dict is None:
+        for (cx, cz), item in self.pending_items.items():
+            if item is None:
                 # Delete from DB
                 self.serializer.save_health(cx, cz, None)
             else:
-                # Save new/updated cube
-                self.serializer.save_health(cx, cz, cube_dict)
-        self.active_cubes.clear()
+                # Save new/updated
+                self.serializer.save_health(cx, cz, item)
+        self.active_items.clear()
         self.loaded_chunks.clear()
-        self.pending_cubes.clear()
+        self.pending_items.clear()

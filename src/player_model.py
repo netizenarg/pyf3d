@@ -61,6 +61,7 @@ class PlayerModel:
         self.index_data = indices
         self.index_count = len(indices)
         self.appended_models = []
+        self.weapon_models = {}
 
     def _setup_buffers(self):
         glBindVertexArray(self.vao)
@@ -92,6 +93,9 @@ class PlayerModel:
 
     def add_model(self, model):
         self.appended_models.append(model)
+
+    def change_model_weapon(self, model, hand):
+        self.weapon_models[hand] = model
 
     def get_model_matrix(self, position, rotation_yaw):
         c = numpy.cos(rotation_yaw)
@@ -138,3 +142,10 @@ class PlayerModel:
         self._draw_scaled_cube(mouth_scale, numpy.array([0.0, head_center_y-0.15, 0.29]), model_matrix)
         for amodel in self.appended_models:
             amodel.draw(view, projection, model_matrix, amodel.offset)
+        for hand, weapon_model in self.weapon_models.items():
+            if hand == 'right':
+                offset = weapon_model.offset
+                weapon_model.draw(view, projection, model_matrix, offset)
+            else:#left
+                offset = numpy.array([-weapon_model.offset[0], weapon_model.offset[1], weapon_model.offset[2]])
+                weapon_model.draw(view, projection, model_matrix, offset)

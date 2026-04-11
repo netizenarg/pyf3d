@@ -59,8 +59,8 @@ def generate_chunk_data(cx, cz, chunk_size, spacing):
 
     stones, trees = [], []
     rng = random.Random((cx * 1000003) ^ (cz * 1000033))
-    num_trees = rng.randint(0, 2)
-    for _ in range(num_trees):
+    num_items = rng.randint(5, 10)
+    for _ in range(num_items):
         x = world_origin_x + rng.uniform(1.5, phys_width - 1.5)
         z = world_origin_z + rng.uniform(1.5, phys_height - 1.5)
         y = get_height(x, z)

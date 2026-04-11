@@ -76,8 +76,10 @@ class StatsPanel:
         self.level = 0
         self.life = 100
         self.mana = 100
-        self.weapon_name = "Rifle"
-        self.ammo_count = 100
+        self.left_weapon = ""
+        self.left_ammo = 0
+        self.right_weapon = ""
+        self.right_ammo = 0
         self.killed_mobs = 0
         self.familiar_name = ""
 
@@ -115,29 +117,32 @@ class StatsPanel:
         self.width = width
         self.height = height
 
-    def update(self, position, speed=10.0, level=0, life=100, mana=100, weapon_name='', ammo_count=0, killed_mobs=0, familiar_name=''):
+    def update(self, position, speed=10.0, level=0, life=100, mana=100,
+               left_weapon='', left_ammo=0, right_weapon='', right_ammo=0,
+               killed_mobs=0, familiar_name=''):
         self.position = position
         self.speed = speed
         self.life = life
         self.mana = mana
-        self.weapon_name = weapon_name
-        self.ammo_count = ammo_count
+        self.left_weapon = left_weapon
+        self.left_ammo = left_ammo
+        self.right_weapon = right_weapon
+        self.right_ammo = right_ammo
         self.familiar_name = familiar_name
         self.level = level
         self.killed_mobs = killed_mobs
 
-        # Build table content (existing rows)
+        # Build table content (3 rows x 4 columns)
         self.cells[0][0] = f"Level: {level}"
         self.cells[0][1] = f"Pos: ({position[0]:.1f}, {position[1]:.1f}, {position[2]:.1f})"
         self.cells[0][2] = f"Speed: {speed:.1f}"
         self.cells[0][3] = f"Life: {life}%"
 
         self.cells[1][0] = f"Mana: {mana}%"
-        self.cells[1][1] = weapon_name
-        self.cells[1][2] = f"Ammo: {ammo_count}"
+        self.cells[1][1] = f"L: {left_weapon} ({left_ammo if left_ammo >= 0 else '∞'})"
+        self.cells[1][2] = f"R: {right_weapon} ({right_ammo if right_ammo >= 0 else '∞'})"
         self.cells[1][3] = f"Kills: {killed_mobs}"
 
-        # Row 2: Level and Killed Mobs
         self.cells[2][0] = familiar_name
         self.cells[2][1] = ""
         self.cells[2][2] = ""

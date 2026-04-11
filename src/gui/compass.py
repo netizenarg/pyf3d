@@ -1,10 +1,11 @@
 import numpy
-from OpenGL.GL import *
-from OpenGL.GL.shaders import compileProgram, compileShader
 import math
 import ctypes
 
-from font import FONT_BITMAPS
+from OpenGL.GL import *
+from OpenGL.GL.shaders import compileProgram, compileShader
+
+from gui.font import FONT_BITMAPS
 from shaders.gui_shdr import TEXT_VERTEX_SHADER, TEXT_FRAGMENT_SHADER
 
 

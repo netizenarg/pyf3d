@@ -1,10 +1,11 @@
 import numpy
 import ctypes
+
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 
 from shaders.gui_shdr import *
-from font import FONT_BITMAPS
+from gui.font import FONT_BITMAPS
 
 
 class StatsPanel:

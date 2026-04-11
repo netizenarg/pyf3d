@@ -1,148 +1,21 @@
 import logging
 import numpy
 import ctypes
+import glfw
+
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
-import glfw
 
 import config
 from shaders.gui_shdr import *
-from font import FONT_BITMAPS
-
-# Ensure Q is exactly 8 rows
-if 81 in FONT_BITMAPS and len(FONT_BITMAPS[81]) < 8:
-    FONT_BITMAPS[81] += [0x00] * (8 - len(FONT_BITMAPS[81]))
-
-
-class Widget:
-    """Base class for all interactive UI widgets."""
-    def __init__(self, x, y, w, h):
-        self.rect = (x, y, w, h)
-
-    def draw(self, menu):
-        raise NotImplementedError
-
-    def handle_mouse(self, x, y, menu):
-        return False
+from gui.font import FONT_BITMAPS
+from gui.widget import Widget
+from gui.checkbox import CheckBox
+from gui.numberbox import NumberBox
+from gui.tabs import Tab
 
 
-class CheckBox(Widget):
-    def __init__(self, label, config_key, x, y, w, h, callback=None):
-        super().__init__(x, y, w, h)
-        self.label = label
-        self.key = config_key
-        self.callback = callback
-
-    def draw(self, menu):
-        x, y, w, h = self.rect
-        box_size = min(h, 20)
-        # Box background
-        menu._draw_rect(x, y, box_size, h, color=(0.5, 0.5, 0.5, 0.9))
-        # Check mark
-        if menu.config.get(self.key, False):
-            menu._draw_rect(x + 2, y + 2, box_size - 4, h - 4, color=(0.2, 0.8, 0.2, 0.9))
-        # Label
-        label_x = x + box_size + 5
-        label_y = y + (h - 12) // 2
-        menu._draw_text(self.label, label_x, label_y, 12,
-                        color=(1, 1, 1, 1), uppercase=True)
-
-    def handle_mouse(self, x, y, menu):
-        rx, ry, rw, rh = self.rect
-        if rx <= x <= rx + rw and ry <= y <= ry + rh:
-            new_val = not menu.config.get(self.key, False)
-            menu.config[self.key] = new_val
-            if self.callback:
-                self.callback(new_val)
-            return True
-        return False
-
-
-class NumericSetting(Widget):
-    """A setting with a label, current value, and +/- buttons."""
-    def __init__(self, label, config_key, x, y, w, h, min_val, max_val, step, callback=None):
-        super().__init__(x, y, w, h)
-        self.label = label
-        self.key = config_key
-        self.min_val = min_val
-        self.max_val = max_val
-        self.step = step
-        self.callback = callback   # callback(new_value)
-        # Button rects (relative to the widget's right side)
-        self.inc_rect = None
-        self.dec_rect = None
-
-    def _update_button_rects(self):
-        x, y, w, h = self.rect
-        self.inc_rect = (x + w - 50, y, 25, h)
-        self.dec_rect = (x + w - 25, y, 25, h)
-
-    def draw(self, menu):
-        if self.inc_rect is None:
-            self._update_button_rects()
-        x, y, w, h = self.rect
-        # Draw background for the whole row (optional, for visual grouping)
-        menu._draw_rect(x, y, w, h, color=(0.5, 0.5, 0.5, 0.9))
-        # Draw label
-        menu._draw_text(self.label, x + 5, y + (h - 12)//2, 12, color=(1,1,1,1), uppercase=True)
-        # Draw current value
-        val_str = f"{menu.config[self.key]:.1f}"
-        menu._draw_text(val_str, x + w - 110, y + (h - 12)//2, 12, color=(1,1,1,1), uppercase=False)
-        # Draw '+' and '-' buttons
-        menu._draw_text("+", self.inc_rect[0] + 8, self.inc_rect[1] + (h - 12)//2, 12, color=(1,1,1,1), uppercase=False)
-        menu._draw_text("-", self.dec_rect[0] + 8, self.dec_rect[1] + (h - 12)//2, 12, color=(1,1,1,1), uppercase=False)
-
-    def handle_mouse(self, x, y, menu):
-        if self.inc_rect is None:
-            self._update_button_rects()
-        ix, iy, iw, ih = self.inc_rect
-        dx, dy, dw, dh = self.dec_rect
-        if ix <= x <= ix + iw and iy <= y <= iy + ih:
-            new_val = min(self.max_val, menu.config[self.key] + self.step)
-            menu.config[self.key] = new_val
-            if self.callback:
-                self.callback(new_val)
-            return True
-        elif dx <= x <= dx + dw and dy <= y <= dy + dh:
-            new_val = max(self.min_val, menu.config[self.key] - self.step)
-            menu.config[self.key] = new_val
-            if self.callback:
-                self.callback(new_val)
-            return True
-        return False
-
-
-class Tab:
-    """A tab containing a list of widgets."""
-    def __init__(self, name):
-        self.name = name
-        self.widgets = []
-
-    def add_widget(self, widget):
-        self.widgets.append(widget)
-
-    def layout(self, x, y, width, row_height, spacing):
-        """Assign positions to all widgets in a vertical list."""
-        current_y = y
-        for w in self.widgets:
-            # All widgets span the full width
-            w.rect = (x, current_y, width, row_height)
-            if isinstance(w, NumericSetting):
-                w._update_button_rects()
-            current_y += row_height + spacing
-
-    def draw(self, menu):
-        for w in self.widgets:
-            w.draw(menu)
-
-    def handle_mouse(self, x, y, menu):
-        for w in self.widgets:
-            if w.handle_mouse(x, y, menu):
-                return True
-        return False
-
-
-class Menu:
+class DialogSettings:
     def __init__(self, window, screen_width, screen_height, config_dict, camera, player=None,
                  stats_panel=None, fps_overlay=None, compass=None):
         self.window = window
@@ -282,11 +155,11 @@ class Menu:
 
         # ---- Core tab ----
         core = Tab("Core")
-        core.add_widget(NumericSetting("Mouse Sens", "mouse_sensitivity", 0,0,0,0,
+        core.add_widget(NumberBox("Mouse Sens", "mouse_sensitivity", 0,0,0,0,
                                        0.1, 10.0, 0.1, update_mouse_sens))
-        core.add_widget(NumericSetting("Move Speed", "movement_speed", 0,0,0,0,
+        core.add_widget(NumberBox("Move Speed", "movement_speed", 0,0,0,0,
                                        1.0, 50.0, 1.0, update_move_speed))
-        core.add_widget(NumericSetting("Player Height", "player_height", 0,0,0,0,
+        core.add_widget(NumberBox("Player Height", "player_height", 0,0,0,0,
                                        0.5, 5.0, 0.1, update_player_height))
         core.add_widget(CheckBox("Show FPS", "show_fps", 0,0,20,20, update_show_fps))
         core.add_widget(CheckBox("Draw Stats", "draw_stats", 0,0,20,20, update_draw_stats))
@@ -370,7 +243,7 @@ class Menu:
         self.active = False
         if self.window:
             glfw.set_input_mode(self.window, glfw.CURSOR, glfw.CURSOR_DISABLED)
-        logging.debug("Menu closed.")
+        logging.debug("Dialog settings closed.")
 
     def save(self):
         config.Config.save(self.config)

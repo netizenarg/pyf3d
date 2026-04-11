@@ -28,10 +28,10 @@ from shaders.terrain_shdr import VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHA
 from camera import get_height
 from config import Config
 from media.audio import Audio
-from gui import Menu
-from gui_stats import StatsPanel
-from gui_fps import FPSOverlay
-from compass import Compass
+from gui.settings import DialogSettings
+from gui.stats import StatsPanel
+from gui.fps import FPSOverlay
+from gui.compass import Compass
 from camera import Camera
 from chunks import ChunkManager
 from stones import StoneManager
@@ -234,7 +234,7 @@ def main():
     compass = Compass(screen.width, screen.height, camera, draw_compass, compass_scale)
     stats_panel = StatsPanel(screen.width, screen.height, draw_stats)
     fps_overlay = FPSOverlay(screen.width, screen.height, config.get("show_fps", False))
-    menu = Menu(window, screen.width, screen.height, config, camera, player, stats_panel, fps_overlay, compass)
+    dialog_settings = DialogSettings(window, screen.width, screen.height, config, camera, player, stats_panel, fps_overlay, compass)
 
     def resize_callback(window, width, height):
         nonlocal proj
@@ -243,7 +243,7 @@ def main():
         glViewport(0, 0, width, height)
         stats_panel.resize(width, height)
         compass.resize(width, height)
-        menu.resize(width, height)
+        dialog_settings.resize(width, height)
         proj = compute_projection(width, height)
 
     glfw.set_window_size_callback(window, resize_callback)
@@ -258,8 +258,8 @@ def main():
         elif action == glfw.PRESS:
             keys[key] = True
             if key == glfw.KEY_F9:
-                menu.active = not menu.active
-                if menu.active:
+                dialog_settings.active = not dialog_settings.active
+                if dialog_settings.active:
                     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_NORMAL)
                 else:
                     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
@@ -321,9 +321,9 @@ def main():
                     target.active = True
                     break
             if button == glfw.MOUSE_BUTTON_LEFT:
-                if menu.active:
+                if dialog_settings.active:
                     xpos, ypos = glfw.get_cursor_pos(window)
-                    menu.handle_mouse(xpos, ypos, button)
+                    dialog_settings.handle_mouse(xpos, ypos, button)
                     return
                 ammo = player.shoot('left', weapon_pos, ray_dir, glfw.get_time())
                 if ammo:
@@ -342,7 +342,7 @@ def main():
 
     def mouse_callback(window, xpos, ypos):
         nonlocal last_x, last_y, first_mouse
-        if menu.active:
+        if dialog_settings.active:
             return
         if first_mouse:
             last_x = xpos
@@ -476,7 +476,7 @@ def main():
 
         compass.draw()
         stats_panel.draw()
-        menu.draw()
+        dialog_settings.draw()
         fps_overlay.draw(dt)
 
         glfw.swap_buffers(window)

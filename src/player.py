@@ -74,6 +74,7 @@ class Player:
         self.familiar_name = ""
         self.level = 0
         self.killed_mobs = 0
+        self.movement = {'w': False, 'a': False, 's': False, 'd': False}
         self.load()
         self.change_rotation_handler = None
 

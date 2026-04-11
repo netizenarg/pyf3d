@@ -41,6 +41,7 @@ from target import Target
 from sky import Sky
 from player import Player
 from player_model import PlayerModel
+from player_ai import PlayerAI
 from health import HealthManager
 from mobs import get_aimed_mob, MobManager
 from weapon import BaseAmmo, Ammo, Weapon
@@ -90,6 +91,7 @@ def main():
     mouse_sensitivity = config["mouse_sensitivity"]
     movement_speed = config["movement_speed"]
     player_height = config["player_height"]
+    auto_play = config.get("auto_play", False)
     terrain_spacing = config["terrain_spacing"]
     chunk_size = config["chunk_size"]
     load_radius = config["load_radius"]
@@ -234,6 +236,8 @@ def main():
     player.set_weapon(weapon)
     ammo_list = [] # Create a list for active ammo
 
+    player_ai = PlayerAI(player, camera, mob_manager, health_manager, loot_manager, weapon, auto_play)
+
     compass = Compass(screen.width, screen.height, camera, draw_compass, compass_scale)
     stats_panel = StatsPanel(screen.width, screen.height, draw_stats)
     fps_overlay = FPSOverlay(screen.width, screen.height, config.get("show_fps", False))
@@ -262,6 +266,11 @@ def main():
             keys[key] = True
             if key == glfw.KEY_F3:
                 bounding_box.enabled = not bounding_box.enabled
+            elif key == glfw.KEY_F4:
+                enabled = player_ai.toggle()
+                logging.info(f"Auto-play mode {'enabled' if enabled else 'disabled'}")
+                config["auto_play"] = enabled
+                Config.save(config)
             elif key == glfw.KEY_F9:
                 dialog_settings.active = not dialog_settings.active
                 if dialog_settings.active:
@@ -370,7 +379,8 @@ def main():
         dt = current_time - last_time
         last_time = current_time
 
-        view, forward = camera.update(keys, dt)
+        speed_mult = 0.5 if player_ai.enabled else 1.0
+        view, forward = camera.update(keys, dt, speed_mult)
 
         # ----- Update world (chunks, sky, etc.) -----
         chunk_manager.update(camera.position)
@@ -404,6 +414,9 @@ def main():
                     break
 
         player.speed = numpy.linalg.norm(numpy.array(player.position) - prev_player_pos) / dt if dt > 0 else 0.0
+
+        if player_ai.enabled:
+            player_ai.update(dt, current_time)
 
         if stats_panel.enabled:
             stats_panel.update(

@@ -42,7 +42,8 @@ from player import Player
 from player_model import PlayerModel
 from health import HealthManager
 from mobs import get_aimed_mob, MobManager
-from weapon import Ammo, Weapon
+from weapon import BaseAmmo, Ammo, Weapon
+from loot import LootManager
 
 
 def compute_projection(width, height):
@@ -192,8 +193,12 @@ def main():
     health_manager = HealthManager(player, chunk_manager,
                                 chunk_size=chunk_size, spacing=terrain_spacing)
 
+    loot_manager = LootManager()
+
     mob_manager = MobManager(player, chunk_manager,
-                             chunk_size=chunk_size, spacing=terrain_spacing)
+                             chunk_size=chunk_size,
+                             spacing=terrain_spacing,
+                             loot_manager=loot_manager)
     player.set_mob_manager(mob_manager)
 
     shader_3d = Shader(VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC)
@@ -220,8 +225,9 @@ def main():
     glEnableVertexAttribArray(0)
     glBindVertexArray(0)
 
+    BaseAmmo.init_geometry()
     Ammo.init_geometry()
-    weapon = Weapon(player, damage=25, ammo_speed=35.0, ammo_range=60.0, cooldown=0.3)
+    weapon = Weapon(damage=25, ammo_speed=35.0, ammo_range=60.0, cooldown=0.3)
     player.set_weapon(weapon)
     ammo_list = [] # Create a list for active ammo
 
@@ -262,7 +268,7 @@ def main():
                     ground_y = get_height(player.position[0], player.position[2])
                     eye_y = ground_y + player.height
                     camera.position = numpy.array([player.position[0], eye_y, player.position[2]])
-                    camera.update_vectors()   # recalc front/right/up from current yaw/pitch
+                    camera.update_vectors()
                 camera.set_mode(1 - camera.mode)
             elif key == glfw.KEY_F10:
                 compass.enabled = not compass.enabled
@@ -271,22 +277,34 @@ def main():
             elif key == glfw.KEY_F12:
                 fps_overlay.enabled = not fps_overlay.enabled
                 config["show_fps"] = fps_overlay.enabled
-                Config.save(config) # persist
+                Config.save(config)
+            elif key in (glfw.KEY_0, glfw.KEY_1, glfw.KEY_2, glfw.KEY_3, glfw.KEY_4,
+                         glfw.KEY_5, glfw.KEY_6, glfw.KEY_7, glfw.KEY_8, glfw.KEY_9):
+                digit = key - glfw.KEY_0
+                rank = digit
+                left_ctrl = glfw.get_key(window, glfw.KEY_LEFT_CONTROL) == glfw.PRESS
+                right_ctrl = glfw.get_key(window, glfw.KEY_RIGHT_CONTROL) == glfw.PRESS
+                if left_ctrl:
+                    weapon = player.bag.get_weapon_by_rank(rank)
+                    if weapon:
+                        player.set_weapon(weapon, 'left')
+                        logging.debug(f"Left weapon set to {weapon.name}")
+                elif right_ctrl:
+                    weapon = player.bag.get_weapon_by_rank(rank)
+                    if weapon:
+                        player.set_weapon(weapon, 'right')
+                        logging.debug(f"Right weapon set to {weapon.name}")
 
     def mouse_button_callback(window, button, action, mods):
-        if button == glfw.MOUSE_BUTTON_LEFT and action == glfw.PRESS:
-            if menu.active:
-                xpos, ypos = glfw.get_cursor_pos(window)
-                menu.handle_mouse(xpos, ypos, button)
-                return
-
+        if action == glfw.PRESS:
             weapon_pos = player.position
-
-            # Determine shooting direction based on camera mode
             if camera.mode == 1:
-                # Third‑person: shoot away from camera (opposite of camera's forward)
                 ray_dir = -camera.front
-                offset = player.weapon.offset
+                if button == glfw.MOUSE_BUTTON_RIGHT:
+                    offset = player.rweapon.offset
+                else:
+                    offset = player.lweapon.offset
+                    offset = numpy.array([-offset[0], offset[1], offset[2]])
                 c, s = math.cos(player.yaw), math.sin(player.yaw)
                 world_offset = numpy.array([
                     offset[0] * c - offset[2] * s,
@@ -295,21 +313,25 @@ def main():
                 ])
                 weapon_pos += world_offset
             else:
-                # First‑person: shoot where camera is looking
                 ray_dir = camera.front
-
-            # Optional target handling (kept for compatibility)
             for target in targets:
                 if target.active and target.hit(camera.position, ray_dir):
                     target.active = False
                     target.position = camera.get_target_position()
                     target.active = True
                     break
-
-            # Spawn ammo from weapon position
-            ammo = player.weapon.shoot(weapon_pos, ray_dir, glfw.get_time())
-            if ammo:
-                ammo_list.append(ammo)
+            if button == glfw.MOUSE_BUTTON_LEFT:
+                if menu.active:
+                    xpos, ypos = glfw.get_cursor_pos(window)
+                    menu.handle_mouse(xpos, ypos, button)
+                    return
+                ammo = player.shoot('left', weapon_pos, ray_dir, glfw.get_time())
+                if ammo:
+                    ammo_list.append(ammo)
+            elif button == glfw.MOUSE_BUTTON_RIGHT:
+                ammo = player.shoot('right', weapon_pos, ray_dir, glfw.get_time())
+                if ammo:
+                    ammo_list.append(ammo)
 
     glfw.set_key_callback(window, key_callback)
     glfw.set_mouse_button_callback(window, mouse_button_callback)
@@ -351,6 +373,7 @@ def main():
         tree_manager.update()
         health_manager.update(dt)
         mob_manager.update(dt)
+        loot_manager.update(player, dt)
         sky.update(dt)
         light_dir, light_intensity = sky.get_combined_light()
 
@@ -361,7 +384,7 @@ def main():
                 ammo_list.remove(ammo)
                 continue
             # Use spatial grid for collision
-            nearby_mobs = mob_manager.get_nearby_mobs(ammo.position, ammo.range + 0.5)
+            nearby_mobs = mob_manager.get_nearby_mobs(ammo.position, ammo.distance + 0.5)
             for mob in nearby_mobs:
                 if not mob.is_alive():
                     continue
@@ -384,8 +407,10 @@ def main():
                 level=player.level,
                 life=player.life,
                 mana=player.mana,
-                weapon_name=player.weapon_name,
-                ammo_count=player.ammo_count,
+                left_weapon=player.lweapon.name,
+                left_ammo=player.ammo_left,
+                right_weapon=player.rweapon.name,
+                right_ammo=player.ammo_right,
                 killed_mobs=player.killed_mobs,
                 familiar_name=player.familiar_name
             )
@@ -418,6 +443,7 @@ def main():
         tree_manager.draw(view, proj, light_dir, light_intensity)
         health_manager.draw(view, proj, light_dir, light_intensity)
         mob_manager.draw(view, proj, light_dir, light_intensity, screen.width, screen.height)
+        loot_manager.draw(view, proj)
 
         for target in targets:
             target.draw(shader_3d, view, proj, light_dir)

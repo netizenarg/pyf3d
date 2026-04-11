@@ -12,6 +12,7 @@ from shaders.shader import Shader
 from shaders.mob_shdr import MOB_VERTEX_SHADER_SRC, MOB_FRAGMENT_SHADER_SRC
 from shaders.ammo_shdr import PARTICLE_AMMO_EXPLOSION_VERTEX_SHADER_SRC, PARTICLE_AMMO_EXPLOSION_FRAGMENT_SHADER_SRC
 from shaders.gui_shdr import RECT_VERTEX_SHADER, RECT_FRAGMENT_SHADER
+from loot_types import LOOT_TYPES
 
 
 def get_aimed_mob(camera, mob_manager, max_distance=50.0):
@@ -104,6 +105,7 @@ class Mob:
         self.max_health = 50
         self.health = self.max_health
         self.attack_cooldown = 0.0
+        self.loot_type = None
 
     def update(self, dt, player_pos, phys_size):
         dx = player_pos[0] - self.position[0]
@@ -363,7 +365,7 @@ class MobModel:
 
 
 class MobManager:
-    def __init__(self, player, chunk_manager, chunk_size=32, spacing=1.0):
+    def __init__(self, player, chunk_manager, chunk_size=32, spacing=1.0, loot_manager=None):
         self.player = player
         self.chunk_manager = chunk_manager
         self.serializer = chunk_manager.serializer
@@ -373,6 +375,7 @@ class MobManager:
         self.active_mobs = {}
         self.loaded_chunks = set()
         self.pending_mobs = {}
+        self.loot_manager = loot_manager
 
         # Mob model
         self.mob_model = MobModel(Shader(MOB_VERTEX_SHADER_SRC, MOB_FRAGMENT_SHADER_SRC))
@@ -446,6 +449,11 @@ class MobManager:
             mob.max_health = random.randint(30, 80)
             mob.health = mob.max_health
             mob.damage = random.randint(8, 20)
+            #mob.loot_type = LOOT_TYPES[random.randint(0, 1)]
+            if random.random() < 1.0:
+                loot_keys = list(LOOT_TYPES.keys())
+                if loot_keys:
+                    mob.loot_type = LOOT_TYPES[random.choice(loot_keys)]
             mobs.append(mob)
         return mobs
 
@@ -484,6 +492,20 @@ class MobManager:
         key = (mob.chunk_cx, mob.chunk_cz)
         if key in self.active_mobs:
             self.active_mobs[key] = [m for m in self.active_mobs[key] if m is not mob]
+
+        if mob.loot_type is not None:
+            # Spawn loot at a random direction, 1.2 to 2.0 units away
+            angle = random.uniform(0, 2 * math.pi)
+            radius = random.uniform(1.2, 2.0)
+            offset_x = math.cos(angle) * radius
+            offset_z = math.sin(angle) * radius
+            loot_pos = numpy.array([impact_point[0] + offset_x,
+                                    impact_point[1],
+                                    impact_point[2] + offset_z])
+            # Place loot on ground
+            loot_pos[1] = get_height(loot_pos[0], loot_pos[2]) + 0.5
+            self.loot_manager.add_loot(mob.loot_type(loot_pos))
+            #logging.debug(f'Restore LOOT {mob.loot_type} at {loot_pos}')
 
         # Determine directions – safe against vertical alignment
         to_player = self.player.position - mob.position

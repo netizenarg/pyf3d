@@ -120,7 +120,7 @@ class StatsPanel:
 
     def update(self, position, speed=10.0, level=0, life=100, mana=100,
                left_weapon='', left_ammo=0, right_weapon='', right_ammo=0,
-               killed_mobs=0, familiar_name=''):
+               killed_mobs=0, familiar_name='', auto_play=False):
         self.position = position
         self.speed = speed
         self.life = life
@@ -132,6 +132,7 @@ class StatsPanel:
         self.familiar_name = familiar_name
         self.level = level
         self.killed_mobs = killed_mobs
+        self.auto_play = auto_play
 
         # Build table content (3 rows x 4 columns)
         self.cells[0][0] = f"Level: {level}"
@@ -145,7 +146,7 @@ class StatsPanel:
         self.cells[1][3] = f"Kills: {killed_mobs}"
 
         self.cells[2][0] = familiar_name
-        self.cells[2][1] = ""
+        self.cells[2][1] = f"Auto: {'ON' if auto_play else 'OFF'}"
         self.cells[2][2] = ""
         self.cells[2][3] = ""
 

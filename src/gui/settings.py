@@ -17,7 +17,7 @@ from gui.tabs import Tab
 
 class DialogSettings:
     def __init__(self, window, screen_width, screen_height, config_dict, camera, player=None,
-                 stats_panel=None, fps_overlay=None, compass=None):
+                 stats_panel=None, fps_overlay=None, compass=None, player_ai=None):
         self.window = window
         self.width = screen_width
         self.height = screen_height
@@ -27,6 +27,7 @@ class DialogSettings:
         self.stats_panel = stats_panel
         self.fps_overlay = fps_overlay
         self.compass = compass
+        self.player_ai = player_ai
         self.active = False
         self.active_tab_index = 0
 
@@ -171,7 +172,14 @@ class DialogSettings:
         # ---- Player tab ----
         player_tab = Tab("Player")
         player_tab.add_widget(CheckBox("Third Person", "camera_mode", 0,0,20,20, update_camera_mode))
-        # Additional player settings can be added here
+        def update_auto_play(val):
+            if self.player_ai:
+                self.player_ai.set_enabled(val)
+                self.config["auto_play"] = val
+                config.Config.save(self.config)
+            else:
+                logging.warning("player_ai not available")
+        player_tab.add_widget(CheckBox("Auto Play", "auto_play", 0,0,20,20, update_auto_play))
         self.tabs.append(player_tab)
 
         # ---- Network tab ----

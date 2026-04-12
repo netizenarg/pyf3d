@@ -576,7 +576,7 @@ class MobManager:
                         nearby.append(mob)
         return nearby
 
-    def update(self, dt):
+    def update_(self, dt):
         # Remove dead mobs
         for chunk_key, mobs in list(self.active_mobs.items()):
             self.active_mobs[chunk_key] = [m for m in mobs if m.is_alive()]
@@ -633,6 +633,108 @@ class MobManager:
         for new_key, mob in mobs_to_add:
             self.active_mobs.setdefault(new_key, []).append(mob)
         # Update particles
+        self.particles = [p for p in self.particles if p.life > 0]
+        for p in self.particles:
+            p.life -= dt * 2.0
+        self.update_dead_parts(dt)
+        self._update_spatial_grid()
+
+    def update(self, dt):
+        # Remove dead mobs
+        for chunk_key, mobs in list(self.active_mobs.items()):
+            self.active_mobs[chunk_key] = [m for m in mobs if m.is_alive()]
+        current_chunks = set(self.chunk_manager.chunks.keys())
+        # Unload
+        for chunk_key in list(self.loaded_chunks):
+            if chunk_key not in current_chunks:
+                if chunk_key in self.active_mobs:
+                    del self.active_mobs[chunk_key]
+                self.loaded_chunks.discard(chunk_key)
+        # Load
+        for chunk_key in current_chunks:
+            if chunk_key not in self.loaded_chunks:
+                mobs = self._load_mobs_for_chunk(chunk_key[0], chunk_key[1])
+                self.active_mobs[chunk_key] = mobs
+                self.loaded_chunks.add(chunk_key)
+        player_pos = numpy.array(self.player.position)
+        # Cap total mobs to 30
+        total_mobs = sum(len(mobs) for mobs in self.active_mobs.values())
+        if total_mobs > 30:
+            chunks_sorted = sorted(self.active_mobs.items(), key=lambda x:
+                (x[0][0] - player_pos[0]//self.phys_size)**2 +
+                (x[0][1] - player_pos[2]//self.phys_size)**2, reverse=True)
+            for (cx, cz), mobs in chunks_sorted:
+                if total_mobs <= 30:
+                    break
+                removed = mobs[:total_mobs-30]
+                self.active_mobs[(cx, cz)] = mobs[len(removed):]
+                total_mobs = sum(len(m) for m in self.active_mobs.values())
+
+        # First, move all mobs and collect changes
+        mobs_to_remove = []
+        mobs_to_add = []
+        all_mobs = []  # list of all mobs for collision resolution
+        for chunk_key, mobs in list(self.active_mobs.items()):
+            for i, mob in enumerate(mobs):
+                new_cx, new_cz = mob.update(dt, player_pos, self.phys_size)
+                new_key = (new_cx, new_cz)
+                if new_key != chunk_key:
+                    mobs_to_remove.append((chunk_key, i, mob))
+                    if new_key in self.loaded_chunks:
+                        mob.chunk_cx = new_cx
+                        mob.chunk_cz = new_cz
+                        mobs_to_add.append((new_key, mob))
+                    else:
+                        pending = self.pending_mobs.setdefault(new_key, [])
+                        pending.append(mob.to_dict())
+                mob.attack_enemy(self.player, dt)
+                all_mobs.append(mob)
+
+        # Apply removals
+        for chunk_key, idx, mob in mobs_to_remove:
+            if chunk_key in self.active_mobs:
+                lst = self.active_mobs[chunk_key]
+                if idx < len(lst) and lst[idx] is mob:
+                    lst.pop(idx)
+        # Apply additions
+        for new_key, mob in mobs_to_add:
+            self.active_mobs.setdefault(new_key, []).append(mob)
+
+        # Resolve collisions between mobs and with player
+        player_radius = 0.6
+        mob_radius = 0.6
+        min_dist = player_radius + mob_radius
+        # Push mobs away from player
+        for mob in all_mobs:
+            dx = mob.position[0] - player_pos[0]
+            dz = mob.position[2] - player_pos[2]
+            dist = math.hypot(dx, dz)
+            if dist < min_dist and dist > 0.01:
+                overlap = min_dist - dist
+                push = overlap / dist
+                mob.position[0] += dx * push
+                mob.position[2] += dz * push
+                mob.position[1] = get_height(mob.position[0], mob.position[2]) + 0.5
+
+        # Mob-mob collision resolution (multiple iterations)
+        for _ in range(3):
+            for i, mob1 in enumerate(all_mobs):
+                for j, mob2 in enumerate(all_mobs[i+1:], i+1):
+                    dx = mob1.position[0] - mob2.position[0]
+                    dz = mob1.position[2] - mob2.position[2]
+                    dist = math.hypot(dx, dz)
+                    if dist < mob_radius * 2 and dist > 0.01:
+                        overlap = (mob_radius * 2) - dist
+                        push = (overlap / dist) * 0.5
+                        mob1.position[0] += dx * push
+                        mob1.position[2] += dz * push
+                        mob2.position[0] -= dx * push
+                        mob2.position[2] -= dz * push
+            # Update heights after each iteration
+            for mob in all_mobs:
+                mob.position[1] = get_height(mob.position[0], mob.position[2]) + 0.5
+
+        # Update particles and dead parts
         self.particles = [p for p in self.particles if p.life > 0]
         for p in self.particles:
             p.life -= dt * 2.0

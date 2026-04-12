@@ -50,6 +50,7 @@ def get_height_seed(x: float, z: float, seed: int = 0) -> float:
 
 class Camera:
     def __init__(self, player=None, yaw=0, mouse_sensitivity=0.002, movement_speed=10.0, mode=0):
+        self.ai_active = False
         self.mode = mode  # 0 = first‑person, 1 = third‑person
         self.player = player
         self.position = numpy.array([self.player.position[0], self.player.position[1], self.player.position[2]])
@@ -129,16 +130,23 @@ class Camera:
             cam_right = numpy.cross(forward, numpy.array([0, 1, 0]))
             if numpy.linalg.norm(cam_right) > 0:
                 cam_right /= numpy.linalg.norm(cam_right)
+            move_dir_forward = forward
+            move_dir_right = cam_right
+            if self.ai_active: # Use player's own forward/right (AI moves where it faces)
+                player_forward = numpy.array([math.sin(self.player.yaw), 0.0, math.cos(self.player.yaw)])
+                player_right = numpy.array([player_forward[2], 0.0, -player_forward[0]])
+                move_dir_forward = player_forward
+                move_dir_right = player_right
             speed = self.movement_speed * dt * speed_multiplier
             move = numpy.array([0.0, 0.0, 0.0])
             if self.player.movement.get('w', False):
-                move += forward
+                move += move_dir_forward
             if self.player.movement.get('s', False):
-                move -= forward
+                move -= move_dir_forward
             if self.player.movement.get('a', False):
-                move -= cam_right
+                move -= move_dir_right
             if self.player.movement.get('d', False):
-                move += cam_right
+                move += move_dir_right
             if keys.get(glfw.KEY_W, False):
                 move += forward
             if keys.get(glfw.KEY_S, False):
@@ -208,10 +216,15 @@ class Camera:
         y = get_height(x, z)
         return numpy.array([x, y, z])
 
-    def update(self, keys, dt, speed_multiplier=1.0):
+    def update(self, keys, dt, speed_multiplier=1.0, ai_active=False):
+        if self.ai_active != ai_active:
+            self.ai_active = ai_active
         view, forward = None, None
         if self.mode == 1:
-            # Third‑person: camera orbits around the player
+            if self.ai_active:
+                self.yaw = math.degrees(self.player.yaw)
+                self.pitch = 20.0
+                self.update_vectors()
             yaw_rad = math.radians(self.yaw)
             pitch_rad = math.radians(self.pitch)
             cam_dir = numpy.array([
@@ -219,8 +232,13 @@ class Camera:
                 math.sin(pitch_rad),
                 math.sin(yaw_rad) * math.cos(pitch_rad)
             ])
-            cam_pos = numpy.array(self.player.position) + cam_dir * self.distance
-            cam_pos[1] += self.height_offset # Apply vertical offset only
+            cam_pos = 0
+            if self.ai_active:
+                forward_vec = numpy.array([math.sin(self.player.yaw), 0.0, math.cos(self.player.yaw)])
+                cam_pos = numpy.array(self.player.position) - forward_vec * self.distance
+            else:
+                cam_pos = numpy.array(self.player.position) + cam_dir * self.distance
+            cam_pos[1] += self.height_offset
             # Clamp to ground
             ground_y = get_height(cam_pos[0], cam_pos[2])
             if cam_pos[1] < ground_y + 0.5:

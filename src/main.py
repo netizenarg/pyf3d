@@ -358,6 +358,8 @@ def main():
 
     def mouse_callback(window, xpos, ypos):
         nonlocal last_x, last_y, first_mouse
+        if player_ai.enabled:
+            return
         if dialog_settings.active:
             return
         if first_mouse:
@@ -382,7 +384,7 @@ def main():
         last_time = current_time
 
         speed_mult = 0.5 if player_ai.enabled else 1.0
-        view, forward = camera.update(keys, dt, speed_mult)
+        view, forward = camera.update(keys, dt, speed_mult, player_ai.enabled)
 
         # ----- Update world (chunks, sky, etc.) -----
         chunk_manager.update(camera.position)
@@ -432,7 +434,9 @@ def main():
                 right_weapon=player.rweapon.name,
                 right_ammo=player.ammo_right,
                 killed_mobs=player.killed_mobs,
-                familiar_name=player.familiar_name
+                familiar_name=player.familiar_name,
+                auto_play=player_ai.enabled
+
             )
 
         # ----- Rendering -----
@@ -469,16 +473,29 @@ def main():
             target.draw(shader_3d, view, proj, light_dir)
 
         if camera.mode == 1: # Draw player model in third‑person
-            if numpy.linalg.norm(last_move_dir) > 0.1:
-                facing = last_move_dir
-            else: # When stationary, face forward (away from camera)
-                facing = numpy.array([forward[0], 0.0, forward[2]])
-                if numpy.linalg.norm(facing) < 0.1:
-                    facing = numpy.array([0.0, 0.0, 1.0])
-                facing = facing / numpy.linalg.norm(facing)
-            player.yaw = math.atan2(facing[0], facing[2])
-            # Draw weapon
+            if not player_ai.enabled:
+                # Manual control: face movement direction
+                if numpy.linalg.norm(last_move_dir) > 0.1:
+                    facing = last_move_dir
+                else:
+                    facing = numpy.array([forward[0], 0.0, forward[2]])
+                    if numpy.linalg.norm(facing) < 0.1:
+                        facing = numpy.array([0.0, 0.0, 1.0])
+                    facing = facing / numpy.linalg.norm(facing)
+                player.yaw = math.atan2(facing[0], facing[2])
+            # When AI is enabled, player.yaw is already set by the AI (pointing at target)
             player.draw(view, proj, light_dir, light_intensity)
+
+        # if camera.mode == 1: # Draw player model in third‑person
+        #     if numpy.linalg.norm(last_move_dir) > 0.1:
+        #         facing = last_move_dir
+        #     else:
+        #         facing = numpy.array([forward[0], 0.0, forward[2]])
+        #         if numpy.linalg.norm(facing) < 0.1:
+        #             facing = numpy.array([0.0, 0.0, 1.0])
+        #         facing = facing / numpy.linalg.norm(facing)
+        #     player.yaw = math.atan2(facing[0], facing[2])
+        #     player.draw(view, proj, light_dir, light_intensity)
 
         for ammo in ammo_list:
             ammo.draw(view, proj)

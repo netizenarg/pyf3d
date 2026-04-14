@@ -80,6 +80,8 @@ class Config:
         "camera_mode": 0,
         "show_fps": False,
         "draw_fog": False,
+        "fog_color": [0.1, 0.2, 0.3],
+        "house_probability": 0.5,
         "log_config": DEFAULT_LOG_CONFIG
     }
 

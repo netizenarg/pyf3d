@@ -5,9 +5,6 @@ from logger import logging
 
 
 class Shader:
-    # def __init__(self, vert_src, frag_src):
-    #     self.program = compileProgram(compileShader(vert_src, GL_VERTEX_SHADER),
-    #                                   compileShader(frag_src, GL_FRAGMENT_SHADER))
 
     def __init__(self, vert_src, frag_src):
         try:

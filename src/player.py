@@ -3,6 +3,7 @@ import numpy
 import logging
 
 from serializer import Serializer
+from camera import get_height
 from weapon import BaseWeapon, Weapon
 from bazuka import Bazuka
 
@@ -54,26 +55,34 @@ class Bag:
 
 
 class Player:
-    def __init__(self, db_path, height=0.5, model=None):
+    def __init__(self, db_path, model=None, height=0.5, position=(0.0, 0.0, 0.0),
+                 portal_position=(0.0, 0.0, 0.0), yaw=0.0, speed=0.0,
+                 vertical_velocity=0.0, grounded=True,
+                 jump_force=8.0, gravity=20.0,
+                 life=100, life_max=100, mana=100, mana_max=100):
         self.model = model
         self.serializer = Serializer(db_path)
-        self.height = height
-        self.position = (0.0, 0.0, 0.0)
-        self.portal_position = (0.0, 0.0, 0.0)
-        self.yaw = 0.0
-        self.speed = 0.0
-        self.life = 100
-        self.life_max = 100
-        self.mana = 100
-        self.mana_max = 100
         self.bag = Bag()
+        self.height = height
+        self.position = position
+        self.portal_position = portal_position
+        self.yaw = yaw
+        self.speed = speed
+        self.vertical_velocity = vertical_velocity
+        self.grounded = grounded
+        self.jump_force = jump_force # upward velocity applied on jump
+        self.gravity = gravity # downward acceleration (units/sec²)
+        self.level = 0
+        self.life = life
+        self.life_max = life_max
+        self.mana = mana
+        self.mana_max = mana_max
         self.weapon_left = ''
         self.weapon_right = self.bag.default_weapon
         self.ammo_left = 0        # ammo for left hand weapon
         self.ammo_right = -1      # -1 = infinite
-        self.familiar_name = ""
-        self.level = 0
         self.killed_mobs = 0
+        self.familiar_name = ""
         self.movement = {'w': False, 'a': False, 's': False, 'd': False}
         self.load()
         self.change_rotation_handler = None
@@ -127,6 +136,8 @@ class Player:
             self.height = data.get('height', 1.5)
             bag_json = data.get('bag', '{}')
             self.bag = Bag.from_dict(json.loads(bag_json))
+        self.grounded = True
+        self.vertical_velocity = 0.0
 
     def set_weapon(self, weapon, hand='right'):
         self.model.change_model_weapon(weapon, hand)
@@ -189,3 +200,22 @@ class Player:
 
     def draw(self, view, proj, light_dir, light_intensity):
         self.model.draw(self.position, self.yaw, view, proj, light_dir, light_intensity)
+
+    def jump(self):
+        if self.grounded:
+            self.vertical_velocity = self.jump_force
+            self.grounded = False
+
+    def update_physics(self, dt, terrain_func=get_height):
+        self.vertical_velocity -= self.gravity * dt
+        new_y = self.position[1] + self.vertical_velocity * dt
+        ground_y = terrain_func(self.position[0], self.position[2])
+        if new_y <= ground_y + self.height:
+            new_y = ground_y + self.height
+            self.vertical_velocity = 0.0
+            self.grounded = True
+        else:
+            self.grounded = False
+        pos_list = list(self.position)
+        pos_list[1] = new_y
+        self.position = tuple(pos_list)

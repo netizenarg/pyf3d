@@ -62,6 +62,8 @@ class Config:
         "server_url": "http://localhost:8080",
         "mouse_sensitivity": 1.0,
         "movement_speed": 10.0,
+        "jump_force": 8.0,
+        "gravity": 20.0,
         "player_height": 1.5,
         "auto_play": False,
         "terrain_spacing": 1.0,

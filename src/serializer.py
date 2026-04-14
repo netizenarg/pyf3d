@@ -39,7 +39,7 @@ class Serializer:
             ''')
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS chunks (
-                    portal INTEGER DEFAULT 0,
+                    portal TEXT, -- foreign key to portals.name (NULL if no portal)
                     cx INTEGER,
                     cz INTEGER,
                     vertices BLOB,
@@ -47,6 +47,17 @@ class Serializer:
                     stones BLOB,
                     trees BLOB,
                     PRIMARY KEY (cx, cz)
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS portals (
+                    name TEXT PRIMARY KEY,
+                    x REAL,
+                    y REAL,
+                    z REAL,
+                    rotation_y REAL DEFAULT 0,
+                    scale REAL DEFAULT 1.0,
+                    target_name TEXT
                 )
             ''')
             cursor.execute('''
@@ -136,7 +147,7 @@ class Serializer:
             cursor.execute('''DELETE FROM chunks WHERE portal = ?''', (1 if portal else 0, ))
             conn.commit()
 
-    def save_chunk(self, portal, cx, cz, vertices, indices, stones, trees):
+    def save_chunk(self, portal_name, cx, cz, vertices, indices, stones, trees):
         vertices_bytes = vertices.tobytes()
         indices_bytes = indices.tobytes()
         rounded_stones = []
@@ -161,13 +172,12 @@ class Serializer:
             })
         stones_json = json.dumps(rounded_stones).encode('utf-8')
         trees_json = json.dumps(rounded_trees).encode('utf-8')
-        portal_int = 1 if portal else 0
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO chunks (portal, cx, cz, vertices, indices, stones, trees)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (portal_int, cx, cz, vertices_bytes, indices_bytes, stones_json, trees_json))
+            ''', (portal_name, cx, cz, vertices_bytes, indices_bytes, stones_json, trees_json))
             conn.commit()
 
     def load_chunk(self, cx, cz):
@@ -176,15 +186,65 @@ class Serializer:
             cursor.execute('SELECT portal, vertices, indices, stones, trees FROM chunks WHERE cx = ? AND cz = ?', (cx, cz))
             row = cursor.fetchone()
             if row:
-                portal, vertices_bytes, indices_bytes, stones_json, trees_json = row
+                portal_name, vertices_bytes, indices_bytes, stones_json, trees_json = row
                 num_vertices = len(vertices_bytes) // (4 * 6)
                 vertices = numpy.frombuffer(vertices_bytes, dtype=numpy.float32).reshape(num_vertices, 6)
                 num_indices = len(indices_bytes) // 4
                 indices = numpy.frombuffer(indices_bytes, dtype=numpy.uint32).reshape(num_indices)
                 stones = json.loads(stones_json.decode('utf-8'))
                 trees = json.loads(trees_json.decode('utf-8'))
-                return bool(portal), vertices, indices, stones, trees
-            return False, None, None, None, None
+                return portal_name, vertices, indices, stones, trees
+            return None, None, None, None, None
+
+    def save_portal(self, name, x, y, z, rotation_y=0.0, scale=1.0, target_name=None):
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO portals (name, x, y, z, rotation_y, scale, target_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (name, x, y, z, rotation_y, scale, target_name))
+            conn.commit()
+
+    def load_all_portals(self):
+        portals = []
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT name, x, y, z, rotation_y, scale, target_name FROM portals')
+            rows = cursor.fetchall()
+            for row in rows:
+                portals.append({
+                    'name': row[0],
+                    'x': row[1],
+                    'y': row[2],
+                    'z': row[3],
+                    'rotation_y': row[4],
+                    'scale': row[5],
+                    'target_name': row[6]
+                })
+        return portals
+
+    def delete_portal(self, name):
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM portals WHERE name = ?', (name,))
+            conn.commit()
+
+    def load_portal_by_name(self, name):
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT x, y, z, rotation_y, scale, target_name FROM portals WHERE name = ?', (name,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'name': name,
+                    'x': row[0],
+                    'y': row[1],
+                    'z': row[2],
+                    'rotation_y': row[3],
+                    'scale': row[4],
+                    'target_name': row[5]
+                }
+            return None
 
     def save_mobs(self, cx, cz, mobs_data):
         json_str = json.dumps(mobs_data)

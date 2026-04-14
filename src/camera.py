@@ -159,30 +159,28 @@ class Camera:
             if numpy.linalg.norm(move) > 0:
                 move = move / numpy.linalg.norm(move)
             new_pos = numpy.array(self.player.position) + move * speed
-            new_pos[1] = get_height(new_pos[0], new_pos[2])
+            new_pos[1] = self.player.position[1]
             # Collision resolution
             if self.house_manager and self.house_manager.collides_with_point(new_pos):
-                # Slide along X then Z
                 resolved = False
                 test_pos = numpy.array(self.player.position)
                 test_pos[0] = new_pos[0]
-                test_pos[1] = get_height(test_pos[0], test_pos[2])
                 if not self.house_manager.collides_with_point(test_pos):
                     new_pos = test_pos
                     resolved = True
                 else:
                     test_pos = numpy.array(self.player.position)
                     test_pos[2] = new_pos[2]
-                    test_pos[1] = get_height(test_pos[0], test_pos[2])
                     if not self.house_manager.collides_with_point(test_pos):
                         new_pos = test_pos
                         resolved = True
                 if not resolved:
                     new_pos = old_pos
             self.player.position = tuple(new_pos)
-        else: # First‑person: move the camera, player follows
+        else:  # First‑person: move the camera, player follows
             speed = self.movement_speed * dt * speed_multiplier
             new_pos = numpy.array(self.position)
+            # Horizontal movement based on input
             if self.player.movement.get('w', False) or keys.get(glfw.KEY_W, False):
                 new_pos += self.front * speed
             if keys.get(glfw.KEY_S, False):
@@ -191,29 +189,30 @@ class Camera:
                 new_pos -= self.right * speed
             if keys.get(glfw.KEY_D, False):
                 new_pos += self.right * speed
-            new_pos[1] = get_height(new_pos[0], new_pos[2]) + self.player.height
+
+            # Keep current Y (physics will update it later)
+            new_pos[1] = self.position[1]
+
+            # Collision resolution with houses (only horizontal sliding)
             if self.house_manager and self.house_manager.collides_with_point(new_pos):
-                # Slide attempt
                 resolved = False
                 test_pos = numpy.array(self.position)
-                # Test X movement
+                # Try moving only X
                 test_pos[0] = new_pos[0]
-                test_pos[1] = get_height(test_pos[0], test_pos[2]) + self.player.height
                 if not self.house_manager.collides_with_point(test_pos):
                     new_pos = test_pos
                     resolved = True
                 else:
                     test_pos = numpy.array(self.position)
                     test_pos[2] = new_pos[2]
-                    test_pos[1] = get_height(test_pos[0], test_pos[2]) + self.player.height
                     if not self.house_manager.collides_with_point(test_pos):
                         new_pos = test_pos
                         resolved = True
                 if not resolved:
                     new_pos = old_pos
+            # Update camera position and sync player
             self.position = new_pos
             self.player.position = (self.position[0], self.position[1], self.position[2])
-        self.adjust_height()
 
     def get_view_matrix(self):
         f = self.front
@@ -291,8 +290,11 @@ class Camera:
                 cam_dir_horiz /= numpy.linalg.norm(cam_dir_horiz)
             forward = -cam_dir_horiz
             self.process_keyboard(keys, dt, forward, speed_multiplier)
-        else:
-            # First‑person: camera moves itself, player follows
+            self.player.update_physics(dt, get_height)
+        else: # First‑person: camera moves itself, player follows
             self.process_keyboard(keys, dt, speed_multiplier=speed_multiplier)
+            self.player.update_physics(dt, get_height)
+            ground_y = get_height(self.position[0], self.position[2])
+            self.position[1] = self.player.position[1]
             view = self.get_view_matrix()
         return view, forward

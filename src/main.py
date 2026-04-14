@@ -89,18 +89,20 @@ def main():
     db_path = config.get("db_path", "data.db")
     network_mode = config.get("network_mode", False)
     server_url = config.get("server_url", "http://localhost:8080")
-    mouse_sensitivity = config["mouse_sensitivity"]
-    movement_speed = config["movement_speed"]
-    player_height = config["player_height"]
+    mouse_sensitivity = config.get("mouse_sensitivity", 1.0)
+    movement_speed = config.get("movement_speed", 10.0)
+    jump_force = config.get("jump_force", 8.0)
+    gravity = config.get("gravity", 20.0)
+    player_height = config.get("player_height", 1.5)
     auto_play = config.get("auto_play", False)
-    terrain_spacing = config["terrain_spacing"]
-    chunk_size = config["chunk_size"]
-    load_radius = config["load_radius"]
-    cloud_count_per_chunk = config["cloud_count_per_chunk"]
-    day_duration = config["day_duration"]
-    star_count = config["star_count"]
-    snow_count = config["snow_count"]
-    snow_draw = config["snow_draw"]
+    terrain_spacing = config.get("terrain_spacing", 1.0)
+    chunk_size = config.get("chunk_size", 16.0)
+    load_radius = config.get("load_radius", 1)
+    cloud_count_per_chunk = config.get("cloud_count_per_chunk", 2)
+    day_duration = config.get("day_duration", 60.0)
+    star_count = config.get("star_count", 500)
+    snow_count = config.get("snow_count", 500)
+    snow_draw = config.get("snow_draw", False)
     draw_stats = config.get("draw_stats", True)
     draw_compass = config.get("draw_compass", False)
     compass_scale = config.get("compass_scale", 1.0)
@@ -117,7 +119,7 @@ def main():
 
     audio = Audio()
 
-    player = Player(db_path, height=player_height)
+    player = Player(db_path, height=player_height, speed=movement_speed, jump_force=jump_force, gravity=gravity)
 
     if spawn_mode == "random":
         rand_x = random.uniform(-random_range, random_range)
@@ -290,13 +292,6 @@ def main():
                     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_NORMAL)
                 else:
                     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
-            elif key == glfw.KEY_V:
-                if camera.mode == 1:
-                    ground_y = get_height(player.position[0], player.position[2])
-                    eye_y = ground_y + player.height
-                    camera.position = numpy.array([player.position[0], eye_y, player.position[2]])
-                    camera.update_vectors()
-                camera.set_mode(1 - camera.mode)
             elif key == glfw.KEY_F10:
                 compass.enabled = not compass.enabled
             elif key == glfw.KEY_F11:
@@ -321,6 +316,15 @@ def main():
                     if weapon:
                         player.set_weapon(weapon, 'right')
                         logging.debug(f"Right weapon set to {weapon.name}")
+            elif key == glfw.KEY_SPACE:
+                player.jump()
+            elif key == glfw.KEY_V:
+                if camera.mode == 1:
+                    ground_y = get_height(player.position[0], player.position[2])
+                    eye_y = ground_y + player.height
+                    camera.position = numpy.array([player.position[0], eye_y, player.position[2]])
+                    camera.update_vectors()
+                camera.set_mode(1 - camera.mode)
 
     def mouse_button_callback(window, button, action, mods):
         if action == glfw.PRESS:

@@ -30,6 +30,7 @@ from camera import get_height
 from config import Config
 from media.audio import Audio
 from gui.settings import DialogSettings
+from gui.portals import DialogPortals
 from gui.stats import StatsPanel
 from gui.fps import FPSOverlay
 from gui.compass import Compass
@@ -37,6 +38,7 @@ from camera import Camera
 from chunks import ChunkManager
 from stones import StoneManager
 from trees import TreeManager
+from portal import PortalManager
 from house import HouseManager
 from target import Target
 from sky import Sky
@@ -189,6 +191,8 @@ def main():
         spacing=terrain_spacing
     )
 
+    portal_manager = PortalManager(chunk_manager)
+
     house_manager = HouseManager(
         chunk_manager,
         chunk_size=chunk_size,
@@ -257,6 +261,7 @@ def main():
     fps_overlay = FPSOverlay(screen.width, screen.height, config.get("show_fps", False))
     dialog_settings = DialogSettings(window, screen.width, screen.height, config, camera,
                                      player, stats_panel, fps_overlay, compass, player_ai)
+    dialog_portals = DialogPortals(window, screen.width, screen.height, player, camera)
 
     def resize_callback(window, width, height):
         nonlocal proj
@@ -272,6 +277,11 @@ def main():
 
     keys = {}
 
+    # Mouse scroll callback
+    def scroll_callback(window, xoffset, yoffset):
+        dialog_portals.handle_scroll(xoffset, yoffset)
+    glfw.set_scroll_callback(window, scroll_callback)
+
     def key_callback(window, key, scancode, action, mods):
         if action == glfw.RELEASE:
             keys[key] = False
@@ -286,6 +296,11 @@ def main():
                 logging.info(f"Auto-play mode {'enabled' if enabled else 'disabled'}")
                 config["auto_play"] = enabled
                 Config.save(config)
+            elif key == glfw.KEY_F5:
+                if dialog_portals.active:
+                    dialog_portals.close()
+                else:
+                    dialog_portals.open()
             elif key == glfw.KEY_F9:
                 dialog_settings.active = not dialog_settings.active
                 if dialog_settings.active:
@@ -328,6 +343,14 @@ def main():
 
     def mouse_button_callback(window, button, action, mods):
         if action == glfw.PRESS:
+            if dialog_settings.active:
+                xpos, ypos = glfw.get_cursor_pos(window)
+                dialog_settings.handle_mouse(xpos, ypos, button)
+                return
+            if dialog_portals.active:
+                xpos, ypos = glfw.get_cursor_pos(window)
+                dialog_portals.handle_mouse(xpos, ypos, button)
+                return
             weapon_pos = player.position
             if camera.mode == 1:
                 ray_dir = -camera.front
@@ -352,10 +375,6 @@ def main():
                     target.active = True
                     break
             if button == glfw.MOUSE_BUTTON_LEFT:
-                if dialog_settings.active:
-                    xpos, ypos = glfw.get_cursor_pos(window)
-                    dialog_settings.handle_mouse(xpos, ypos, button)
-                    return
                 ammo = player.shoot('left', weapon_pos, ray_dir, glfw.get_time())
                 if ammo:
                     ammo_list.append(ammo)
@@ -375,7 +394,7 @@ def main():
         nonlocal last_x, last_y, first_mouse
         if player_ai.enabled:
             return
-        if dialog_settings.active:
+        if dialog_settings.active or dialog_portals.active:
             return
         if first_mouse:
             last_x = xpos
@@ -404,6 +423,7 @@ def main():
         chunk_manager.update(camera.position)
         stone_manager.update()
         tree_manager.update()
+        portal_manager.update(dt)
         house_manager.update()
         health_manager.update(dt)
         mob_manager.update(dt)
@@ -480,6 +500,7 @@ def main():
         chunk_manager.draw(shader_3d)
         stone_manager.draw(view, proj, light_dir, light_intensity)
         tree_manager.draw(view, proj, light_dir, light_intensity)
+        portal_manager.draw(view, proj, light_dir, light_intensity)
         house_manager.draw(view, proj, light_dir, light_intensity)
         health_manager.draw(view, proj, light_dir, light_intensity)
         mob_manager.draw(view, proj, light_dir, light_intensity, screen.width, screen.height)
@@ -502,16 +523,31 @@ def main():
             # When AI is enabled, player.yaw is already set by the AI (pointing at target)
             player.draw(view, proj, light_dir, light_intensity)
 
-        # if camera.mode == 1: # Draw player model in third‑person
-        #     if numpy.linalg.norm(last_move_dir) > 0.1:
-        #         facing = last_move_dir
-        #     else:
-        #         facing = numpy.array([forward[0], 0.0, forward[2]])
-        #         if numpy.linalg.norm(facing) < 0.1:
-        #             facing = numpy.array([0.0, 0.0, 1.0])
-        #         facing = facing / numpy.linalg.norm(facing)
-        #     player.yaw = math.atan2(facing[0], facing[2])
-        #     player.draw(view, proj, light_dir, light_intensity)
+        # Portal collision and teleport (only when not in dialog)
+        # Portal collision and teleport (only when not in dialog)
+        if not dialog_portals.active:
+            portal = portal_manager.get_portal_at(player.position, radius=0.8)
+            if portal:
+                # Save current portal to DB
+                player.serializer.save_portal(portal.name, portal.base_x, portal.center_y, portal.base_z)
+
+                # Get ALL portals from database
+                all_portals = player.serializer.load_all_portals()
+                other_portals = [p for p in all_portals if p['name'] != portal.name]
+
+                if other_portals:
+                    target_dict = random.choice(other_portals)
+                    # Place player at the target portal (with optional slight offset to avoid immediate re-trigger)
+                    target_x = target_dict['x'] + 3.0
+                    target_y = target_dict['y'] + player.height
+                    target_z = target_dict['z'] + 3.0
+
+                    player.position = (target_x, target_y, target_z)
+                    camera.position = numpy.array([target_x, target_y, target_z])
+                    camera.adjust_height()
+
+                    # Save target portal as visited (optional)
+                    player.serializer.save_portal(target_dict['name'], target_dict['x'], target_dict['y'], target_dict['z'])
 
         for ammo in ammo_list:
             ammo.draw(view, proj)
@@ -569,8 +605,9 @@ def main():
 
         compass.draw()
         stats_panel.draw()
-        dialog_settings.draw()
         fps_overlay.draw(dt)
+        dialog_settings.draw()
+        dialog_portals.draw()
 
         glfw.swap_buffers(window)
         glfw.poll_events()

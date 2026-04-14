@@ -10,10 +10,29 @@ from OpenGL.GL import *
 
 from network import NetworkClient
 from camera import get_height
+from portal import Portal
 
+
+def generate_portal(cx, cz, world_origin_x, world_origin_z, phys_width, phys_height, rng):
+    """Return a portal dict or None. At most one portal per chunk."""
+    PORTAL_PROBABILITY = 0.1  # adjust as desired
+    if rng.random() >= PORTAL_PROBABILITY:
+        return None
+    margin = 2.0
+    x = world_origin_x + rng.uniform(margin, phys_width - margin)
+    z = world_origin_z + rng.uniform(margin, phys_height - margin)
+    rotation_y = rng.uniform(0, 2 * math.pi)
+    scale = rng.uniform(0.9, 1.1)
+    y = get_height(x, z)
+    name = f"{int(round(x))}_{int(round(y))}_{int(round(z))}"
+    return {
+        'name': name,
+        'x': x, 'z': z,
+        'rotation_y': rotation_y,
+        'scale': scale
+    }
 
 def generate_chunk_data(cx, cz, chunk_size, spacing):
-    is_portal = False
     phys_width = (chunk_size - 1) * spacing
     phys_height = (chunk_size - 1) * spacing
     world_origin_x = cx * phys_width
@@ -84,7 +103,10 @@ def generate_chunk_data(cx, cz, chunk_size, spacing):
             'rotation_y': rotation_y
         })
 
-    return (is_portal, cx, cz, vertices, indices, stones, trees)
+    # Portal generation (max one)
+    portal = generate_portal(cx, cz, world_origin_x, world_origin_z, phys_width, phys_height, rng)
+
+    return (cx, cz, vertices, indices, stones, trees, portal)
 
 
 class ChunkWorker(mp.Process):
@@ -146,14 +168,27 @@ class ChunkGenerator:
 
 
 class Chunk:
-    def __init__(self, is_portal=False, cx=0, cz=0, vertices=[], indices=[], stones=None, trees=None):
-        self.is_portal = is_portal
+    def __init__(self, cx=0, cz=0, vertices=[], indices=[], stones=None, trees=None, portal=None):
         self.cx = cx
         self.cz = cz
         self.vertices = vertices
         self.indices = indices
         self.stones = stones if stones is not None else []
         self.trees = trees if trees is not None else []
+
+        if portal is not None and isinstance(portal, dict):
+            self.portal = Portal(
+                name=portal.get('name', ''),
+                base_x=portal['x'],
+                base_z=portal['z'],
+                rotation_y=portal.get('rotation_y', 0),
+                scale=portal.get('scale', 1.0)
+            )
+        elif portal is not None and isinstance(portal, Portal):
+            self.portal = portal
+        else:
+            self.portal = None
+
         self.vao = None
         self.vbo = None
         self.ebo = None
@@ -222,8 +257,23 @@ class ChunkManager:
         self.first_running = True
 
     def _generate_sync(self, cx, cz):
-        data = generate_chunk_data(cx, cz, self.chunk_size, self.spacing)
-        return Chunk(*data)
+        cx, cz, vertices, indices, stones, trees, portal = generate_chunk_data(cx, cz, self.chunk_size, self.spacing)
+        return Chunk(cx, cz, vertices, indices, stones, trees, portal)
+
+    def _create_chunk_from_data(self, data):
+        cx, cz, vertices, indices, stones, trees, portal_dict = data
+        if portal_dict and self.serializer:
+            x, z = portal_dict['x'], portal_dict['z']
+            ground_y = get_height(x, z)
+            # Portal height is 3.2 * scale
+            scale = portal_dict.get('scale', 1.0)
+            center_y = ground_y + (3.2 * scale) / 2.0
+            self.serializer.save_portal(
+                portal_dict['name'], x, center_y, z,
+                portal_dict['rotation_y'],
+                scale
+            )
+        return Chunk(cx, cz, vertices, indices, stones, trees, portal_dict)
 
     def load_chunks_around(self, center_cx, center_cz):
         if not self.serializer:
@@ -233,16 +283,21 @@ class ChunkManager:
                 cx, cz = center_cx + dx, center_cz + dz
                 key = (cx, cz)
                 if key not in self.chunks:
-                    is_portal, vertices, indices, stones, trees = self.serializer.load_chunk(cx, cz)
+                    portal_name, vertices, indices, stones, trees = self.serializer.load_chunk(cx, cz)
                     if vertices is not None:
-                        self.chunks[key] = Chunk(is_portal, cx, cz, vertices, indices, stones, trees)
+                        portal_dict = None
+                        if portal_name:
+                            portal_dict = self.serializer.load_portal_by_name(portal_name)
+                        self.chunks[key] = Chunk(cx, cz, vertices, indices, stones, trees, portal_dict)
 
     def save_all_chunks(self):
         if not self.serializer:
             return
         self.serializer.clear_chunks()
         for (cx, cz), chunk in self.chunks.items():
-            self.serializer.save_chunk(chunk.is_portal, cx, cz, chunk.vertices, chunk.indices, chunk.stones, chunk.trees)
+            portal_name = chunk.portal.name if chunk.portal else None
+            self.serializer.save_chunk(portal_name, cx, cz,
+                chunk.vertices, chunk.indices, chunk.stones, chunk.trees)
 
     def update(self, camera_pos):
         phys_size = (self.chunk_size - 1) * self.spacing
@@ -267,9 +322,9 @@ class ChunkManager:
                     self.network_client.request_chunk(*key)
                 elif self.first_running and self.serializer:
                     self.first_running = not self.first_running
-                    is_portal, vertices, indices, stones, trees = self.serializer.load_chunk(*key)
+                    portal_name, vertices, indices, stones, trees = self.serializer.load_chunk(*key)
                     if vertices is not None:
-                        self.chunks[key] = Chunk(is_portal, *key, vertices, indices, stones, trees)
+                        self.chunks[key] = Chunk(*key, vertices, indices, stones, trees, portal_name)
                         continue
                 elif self.generator:
                     self.pending_requests.add(key)
@@ -279,25 +334,25 @@ class ChunkManager:
 
         if self.network_client:
             for data in self.network_client.get_completed():
-                is_portal, cx, cz, vertices, indices, stones, trees = data
+                cx, cz, vertices, indices, stones, trees = data
                 key = (cx, cz)
                 if key in self.pending_requests and key in needed:
                     self.pending_requests.discard(key)
                     if vertices is not None:
-                        chunk = Chunk(is_portal, cx, cz, vertices, indices, stones, trees)
+                        chunk = Chunk(cx, cz, vertices, indices, stones, trees)
                         self.chunks[key] = chunk
                         if self.serializer:
-                            self.serializer.save_chunk(cx, cz, vertices, indices, stones, trees)
+                            self.serializer.save_chunk(chunk.portal_name, cx, cz, vertices, indices, stones, trees)
                 else:
                     self.pending_requests.discard(key)
 
         if self.generator:
             for data in self.generator.get_completed():
-                is_portal, cx, cz, vertices, indices, stones, trees = data
+                cx, cz, vertices, indices, stones, trees, portal = data
                 key = (cx, cz)
                 if key in self.pending_requests and key in needed:
                     self.pending_requests.discard(key)
-                    self.chunks[key] = Chunk(is_portal, cx, cz, vertices, indices, stones, trees)
+                    self.chunks[key] = Chunk(cx, cz, vertices, indices, stones, trees, portal)
                 else:
                     self.pending_requests.discard(key)
 

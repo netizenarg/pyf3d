@@ -49,7 +49,7 @@ def get_height_seed(x: float, z: float, seed: int = 0) -> float:
 
 
 class Camera:
-    def __init__(self, player=None, yaw=0, mouse_sensitivity=0.002, movement_speed=10.0, mode=0):
+    def __init__(self, player=None, yaw=0, mouse_sensitivity=0.002, movement_speed=10.0, mode=0, house_manager=None):
         self.ai_active = False
         self.mode = mode  # 0 = first‑person, 1 = third‑person
         self.player = player
@@ -67,6 +67,7 @@ class Camera:
         self.right = numpy.array([1.0, 0.0, 0.0])
         self.mouse_sensitivity = mouse_sensitivity
         self.movement_speed = movement_speed
+        self.house_manager = house_manager
         self.update_vectors()
         self.adjust_height()
 
@@ -125,7 +126,7 @@ class Camera:
         self.update_vectors()
 
     def process_keyboard(self, keys, dt, forward=None, speed_multiplier=1.0):
-        """Movement handling for all modes."""
+        old_pos = numpy.array(self.position) if self.mode == 0 else numpy.array(self.player.position)
         if self.mode == 1: # Third‑person: move the player relative to camera direction
             cam_right = numpy.cross(forward, numpy.array([0, 1, 0]))
             if numpy.linalg.norm(cam_right) > 0:
@@ -159,19 +160,58 @@ class Camera:
                 move = move / numpy.linalg.norm(move)
             new_pos = numpy.array(self.player.position) + move * speed
             new_pos[1] = get_height(new_pos[0], new_pos[2])
+            # Collision resolution
+            if self.house_manager and self.house_manager.collides_with_point(new_pos):
+                # Slide along X then Z
+                resolved = False
+                test_pos = numpy.array(self.player.position)
+                test_pos[0] = new_pos[0]
+                test_pos[1] = get_height(test_pos[0], test_pos[2])
+                if not self.house_manager.collides_with_point(test_pos):
+                    new_pos = test_pos
+                    resolved = True
+                else:
+                    test_pos = numpy.array(self.player.position)
+                    test_pos[2] = new_pos[2]
+                    test_pos[1] = get_height(test_pos[0], test_pos[2])
+                    if not self.house_manager.collides_with_point(test_pos):
+                        new_pos = test_pos
+                        resolved = True
+                if not resolved:
+                    new_pos = old_pos
             self.player.position = tuple(new_pos)
         else: # First‑person: move the camera, player follows
             speed = self.movement_speed * dt * speed_multiplier
-            if self.player.movement.get('w', False):
-                self.position += self.front * speed
-            if keys.get(glfw.KEY_W, False):
-                self.position += self.front * speed
+            new_pos = numpy.array(self.position)
+            if self.player.movement.get('w', False) or keys.get(glfw.KEY_W, False):
+                new_pos += self.front * speed
             if keys.get(glfw.KEY_S, False):
-                self.position -= self.front * speed
+                new_pos -= self.front * speed
             if keys.get(glfw.KEY_A, False):
-                self.position -= self.right * speed
+                new_pos -= self.right * speed
             if keys.get(glfw.KEY_D, False):
-                self.position += self.right * speed
+                new_pos += self.right * speed
+            new_pos[1] = get_height(new_pos[0], new_pos[2]) + self.player.height
+            if self.house_manager and self.house_manager.collides_with_point(new_pos):
+                # Slide attempt
+                resolved = False
+                test_pos = numpy.array(self.position)
+                # Test X movement
+                test_pos[0] = new_pos[0]
+                test_pos[1] = get_height(test_pos[0], test_pos[2]) + self.player.height
+                if not self.house_manager.collides_with_point(test_pos):
+                    new_pos = test_pos
+                    resolved = True
+                else:
+                    test_pos = numpy.array(self.position)
+                    test_pos[2] = new_pos[2]
+                    test_pos[1] = get_height(test_pos[0], test_pos[2]) + self.player.height
+                    if not self.house_manager.collides_with_point(test_pos):
+                        new_pos = test_pos
+                        resolved = True
+                if not resolved:
+                    new_pos = old_pos
+            self.position = new_pos
             self.player.position = (self.position[0], self.position[1], self.position[2])
         self.adjust_height()
 

@@ -37,6 +37,7 @@ from camera import Camera
 from chunks import ChunkManager
 from stones import StoneManager
 from trees import TreeManager
+from house import HouseManager
 from target import Target
 from sky import Sky
 from player import Player
@@ -107,7 +108,8 @@ def main():
     random_range = config.get("random_spawn_range", 500)
     camera_mode = config.get("camera_mode", 0)
     draw_fog = config.get("draw_fog", False)
-    fog_color = numpy.array([0.1, 0.2, 0.3])
+    fog_color = numpy.array(config.get("fog_color", [0.1, 0.2, 0.3]))
+    house_probability = config.get("house_probability", 0.5)   # approximate number of houses to spawn
     # Compute physical distance to furthest loaded chunk corner
     max_visible_dist = (chunk_size - 1) * (load_radius + 0.5)
     fog_start = max_visible_dist * 0.6   # 13.5
@@ -153,16 +155,6 @@ def main():
 
     bounding_box = BoundingBox()
 
-    camera = Camera(player=player, mode=camera_mode,
-                    mouse_sensitivity=mouse_sensitivity,
-                    movement_speed=movement_speed)
-
-    def change_rotation_handler(value):
-        camera.rotate_only_horizontal = value
-        audio.play_random_thread(duration=1.0, volume=0.5, mode='sweep', min_freq=300, max_freq=1500)
-
-    player.change_rotation_handler = change_rotation_handler
-
     chunk_manager = ChunkManager(
         chunk_size=chunk_size,
         load_radius=load_radius,
@@ -183,16 +175,23 @@ def main():
               fog_start=fog_start,
               fog_end=fog_end)
 
+    stone_manager = StoneManager(
+        chunk_manager,
+        chunk_size=chunk_size,
+        spacing=terrain_spacing
+    )
+
     tree_manager = TreeManager(
         chunk_manager,
         chunk_size=chunk_size,
         spacing=terrain_spacing
     )
 
-    stone_manager = StoneManager(
+    house_manager = HouseManager(
         chunk_manager,
         chunk_size=chunk_size,
-        spacing=terrain_spacing
+        spacing=terrain_spacing,
+        house_probability=house_probability
     )
 
     health_manager = HealthManager(player, chunk_manager,
@@ -203,7 +202,8 @@ def main():
     mob_manager = MobManager(player, chunk_manager,
                              chunk_size=chunk_size,
                              spacing=terrain_spacing,
-                             loot_manager=loot_manager)
+                             loot_manager=loot_manager,
+                             house_manager=house_manager)
     player.set_mob_manager(mob_manager)
 
     shader_3d = Shader(VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC)
@@ -211,6 +211,17 @@ def main():
 
     player_model = PlayerModel(shader_3d)
     player.set_model(player_model)
+
+    camera = Camera(player=player, mode=camera_mode,
+                    mouse_sensitivity=mouse_sensitivity,
+                    movement_speed=movement_speed,
+                    house_manager=house_manager)
+
+    def change_rotation_handler(value):
+        camera.rotate_only_horizontal = value
+        audio.play_random_thread(duration=1.0, volume=0.5, mode='sweep', min_freq=300, max_freq=1500)
+
+    player.change_rotation_handler = change_rotation_handler
 
     targets = []
     for _ in range(TARGET_COUNT):
@@ -386,10 +397,10 @@ def main():
         speed_mult = 0.5 if player_ai.enabled else 1.0
         view, forward = camera.update(keys, dt, speed_mult, player_ai.enabled)
 
-        # ----- Update world (chunks, sky, etc.) -----
         chunk_manager.update(camera.position)
         stone_manager.update()
         tree_manager.update()
+        house_manager.update()
         health_manager.update(dt)
         mob_manager.update(dt)
         loot_manager.update(player, dt)
@@ -465,6 +476,7 @@ def main():
         chunk_manager.draw(shader_3d)
         stone_manager.draw(view, proj, light_dir, light_intensity)
         tree_manager.draw(view, proj, light_dir, light_intensity)
+        house_manager.draw(view, proj, light_dir, light_intensity)
         health_manager.draw(view, proj, light_dir, light_intensity)
         mob_manager.draw(view, proj, light_dir, light_intensity, screen.width, screen.height)
         loot_manager.draw(view, proj)
@@ -530,6 +542,17 @@ def main():
                     center = item.position
                 size = getattr(item, 'size', 0.8)
                 bounding_box.draw(center, (size, size, size), view, proj, (1, 1, 0))
+            for ammo in ammo_list:
+                if not ammo.active:
+                    continue
+                center = ammo.position
+                size = getattr(ammo, 'size', 0.2)
+                bounding_box.draw(center, (size, size, size), view, proj, (0, 1, 1))
+            for houses_list in house_manager.houses.values():
+                for house in houses_list:
+                    center = (house.base_x, get_height(house.base_x, house.base_z) + 0.8, house.base_z)
+                    size = 1.5 * house.scale   # approximate
+                    bounding_box.draw(center, (size, size * 1.5, size), view, proj, (0.5, 0.2, 0.8))
 
         # Crosshair
         glDisable(GL_DEPTH_TEST)
@@ -551,6 +574,7 @@ def main():
     chunk_manager.save_all_chunks()
     stone_manager.shutdown()
     tree_manager.shutdown()
+    house_manager.shutdown()
     mob_manager.shutdown()
     health_manager.shutdown()
     chunk_manager.shutdown()

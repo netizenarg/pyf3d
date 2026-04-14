@@ -138,7 +138,7 @@ class Player:
     def pickup_weapon(self, weapon):
         result, msg = self.bag.add_weapon(weapon)
         if not result:
-            logging.debug(msg)
+            #logging.debug(msg)
             return False
         if self.lweapon.rank < weapon.rank:
             self.set_weapon(weapon, 'left')

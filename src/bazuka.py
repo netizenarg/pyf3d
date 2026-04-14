@@ -1,6 +1,7 @@
 import numpy
 import math
 import ctypes
+
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 

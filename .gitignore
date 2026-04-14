@@ -12,6 +12,9 @@ __pycache__/
 # C extensions
 *.so
 
+# logging
+logs/
+
 # Distribution / packaging
 .Python
 build/

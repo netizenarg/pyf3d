@@ -530,6 +530,12 @@ def main():
                     center = item.position
                 size = getattr(item, 'size', 0.8)
                 bounding_box.draw(center, (size, size, size), view, proj, (1, 1, 0))
+            for ammo in ammo_list:
+                if not ammo.active:
+                    continue
+                center = ammo.position
+                size = getattr(ammo, 'size', 0.2)
+                bounding_box.draw(center, (size, size, size), view, proj, (0, 1, 1))
 
         # Crosshair
         glDisable(GL_DEPTH_TEST)

@@ -202,7 +202,8 @@ def main():
     mob_manager = MobManager(player, chunk_manager,
                              chunk_size=chunk_size,
                              spacing=terrain_spacing,
-                             loot_manager=loot_manager)
+                             loot_manager=loot_manager,
+                             house_manager=house_manager)
     player.set_mob_manager(mob_manager)
 
     shader_3d = Shader(VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC)

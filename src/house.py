@@ -456,3 +456,38 @@ class HouseManager:
                     if py + player_radius > hy - 0.6*house.scale and py - player_radius < hy + 0.6*house.scale:
                         return True
         return False
+
+    def resolve_collision(self, point, radius=0.5, max_iter=5):
+        """
+        Attempt to move a point out of collision with all houses.
+        Returns a new point (numpy array) that is collision‑free.
+        """
+        p = numpy.array(point, dtype=float)
+        for _ in range(max_iter):
+            collided = False
+            for houses_list in self.houses.values():
+                for house in houses_list:
+                    hx, hy, hz = house.get_collision_center()
+                    dx = p[0] - hx
+                    dz = p[2] - hz
+                    dist_sq = dx*dx + dz*dz
+                    min_dist = house.collision_radius + radius
+                    if dist_sq < min_dist * min_dist:
+                        # Vertical overlap check (same as in collides_with_point)
+                        if p[1] + radius > hy - 0.6*house.scale and p[1] - radius < hy + 0.6*house.scale:
+                            collided = True
+                            dist = math.sqrt(dist_sq)
+                            if dist > 0.001:
+                                push_dir_x = dx / dist
+                                push_dir_z = dz / dist
+                                overlap = min_dist - dist
+                                p[0] += push_dir_x * overlap
+                                p[2] += push_dir_z * overlap
+                            else:
+                                p[0] += 0.1  # arbitrary nudge
+                            break
+                if collided:
+                    break
+            if not collided:
+                break
+        return p

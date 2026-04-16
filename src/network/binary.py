@@ -3,6 +3,13 @@ import zlib
 from typing import Tuple
 from enum import IntEnum, IntFlag
 
+CURRENT_PROTOCOL_VERSION = 1
+MAX_MESSAGE_SIZE = 10 * 1024 * 1024
+
+# Header: version(1) + flags(1) + msg_type(2) + seq(4) + timestamp(4) + length(4) + checksum(4) = 20 bytes
+HEADER_FORMAT = '!BB H I I I I'
+HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+
 
 class MessageType(IntEnum):
     INVALID = 0
@@ -48,14 +55,6 @@ class ProtocolFlags(IntFlag):
     PRIORITY_LOW = 0x20
 
 
-CURRENT_PROTOCOL_VERSION = 1
-MAX_MESSAGE_SIZE = 10 * 1024 * 1024
-
-
-# version, flags, msg_type, seq, timestamp, length, checksum
-HEADER_FORMAT = '!BB H I I I I'
-HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
-
 class NetworkHeader:
     __slots__ = ('version', 'flags', 'message_type', 'sequence', 'timestamp', 'length', 'checksum')
     def __init__(self, message_type: int = 0, sequence: int = 0,
@@ -68,19 +67,19 @@ class NetworkHeader:
         self.length = 0
         self.checksum = 0
 
-        def pack(self) -> bytes:
-            return struct.pack(HEADER_FORMAT,
-                               self.version, self.flags, self.message_type,
-                               self.sequence, self.timestamp, self.length, self.checksum)
+    def pack(self) -> bytes:
+        return struct.pack(HEADER_FORMAT,
+                           self.version, self.flags, self.message_type,
+                           self.sequence, self.timestamp, self.length, self.checksum)
 
-        @classmethod
-        def unpack(cls, data: bytes) -> 'NetworkHeader':
-            (version, flags, msg_type, seq, ts, length, checksum) = struct.unpack(HEADER_FORMAT, data)
-            header = cls(msg_type, seq, version, flags)
-            header.timestamp = ts
-            header.length = length
-            header.checksum = checksum
-            return header
+    @classmethod
+    def unpack(cls, data: bytes) -> 'NetworkHeader':
+        (version, flags, msg_type, seq, ts, length, checksum) = struct.unpack(HEADER_FORMAT, data)
+        header = cls(msg_type, seq, version, flags)
+        header.timestamp = ts
+        header.length = length
+        header.checksum = checksum
+        return header
 
 
 class BinaryWriter:
@@ -280,7 +279,7 @@ class BinaryMessage:
 class ProtocolBinary:
     def __init__(self):
         self.next_sequence = 1
-        self.pending_acks = {}   # seq -> timestamp
+        self.pending_acks = {}
 
     def create_message(self, msg_type: int, payload: bytes, flags: int = 0, reliable: bool = False) -> BinaryMessage:
         header = NetworkHeader(message_type=msg_type, sequence=self.next_sequence, flags=flags)

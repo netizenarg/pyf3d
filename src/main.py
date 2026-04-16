@@ -29,6 +29,7 @@ from bbox import BoundingBox
 from camera import get_height
 from config import Config
 from media.audio import Audio
+from network.client import NetworkClient
 from gui.settings import DialogSettings
 from gui.portals import DialogPortals
 from gui.stats import StatsPanel
@@ -120,7 +121,7 @@ def main():
     fog_start = max_visible_dist * 0.6   # 13.5
     fog_end = max_visible_dist * 0.9     # 20.25
 
-    # Check protocol and URL compatibility
+    network_client = None
     server_url = "localhost:9999"
     if network_mode:
         protocol = config.get("protocol", "binary")
@@ -129,7 +130,9 @@ def main():
                 server_url = f'{server_host}:{server_port}'
             case 'websocket':
                 server_url = f'ws://{server_host}:{server_port}'
-        logging.info(f'Connect will to {server_url}')
+        logging.info(f'Connect will to: {server_url}')
+        logging.info(f'Protocol type: {protocol}')
+        network_client = NetworkClient(server_url, protocol)
 
     audio = Audio()
 
@@ -177,7 +180,7 @@ def main():
         spacing=terrain_spacing,
         player=player,
         network_mode=network_mode,
-        server_url=server_url
+        network_client=network_client
     )
 
     sky = Sky(chunk_manager,

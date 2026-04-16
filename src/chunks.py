@@ -11,7 +11,6 @@ from OpenGL.GL import *
 
 from camera import get_height
 from portal import Portal
-from network.client import NetworkClient
 
 
 def generate_portal(cx, cz, world_origin_x, world_origin_z, phys_width, phys_height, rng):
@@ -235,7 +234,7 @@ class Chunk:
 
 class ChunkManager:
     def __init__(self, chunk_size=32, load_radius=3, spacing=1.0,
-                 player=None, network_mode=False, server_url=''):
+                 player=None, network_mode=False, network_client=None):
         self.chunk_size = chunk_size
         self.load_radius = load_radius
         self.spacing = spacing
@@ -244,9 +243,7 @@ class ChunkManager:
         self.pending_requests = set()
         self.generator = ChunkGenerator(chunk_size, spacing)
         self.network_mode = network_mode
-        self.network_client = None
-        if network_mode:
-            self.network_client = NetworkClient(server_url)
+        self.network_client = network_client
         if player:
             phys_size = (chunk_size - 1) * spacing
             player_cx = int(player.position[0] // phys_size)

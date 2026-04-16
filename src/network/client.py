@@ -2,7 +2,7 @@ import asyncio
 import logging
 import queue
 import threading
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import numpy
 
@@ -16,7 +16,7 @@ from network.websocket import ProtocolWebsocket
 class NetworkClient:
     """Synchronous network client that runs asyncio in a background thread."""
 
-    def __init__(self, server_url: str):
+    def __init__(self, server_url: str, protocol: str = "binary"):
         # Normalize URL: convert http(s):// to ws(s)://, add scheme if missing
         if server_url.startswith("http://"):
             server_url = server_url.replace("http://", "ws://", 1)
@@ -28,6 +28,7 @@ class NetworkClient:
         if server_url.endswith("/"):
             server_url = server_url[:-1]
         self.server_url = server_url
+        self.protocol = protocol
         self.binary_proto = ProtocolBinary()
         self._request_queue = queue.Queue()
         self._response_queue = queue.Queue()
@@ -44,6 +45,7 @@ class NetworkClient:
     async def _async_main(self):
         self.ws_proto = ProtocolWebsocket(self.server_url, self.binary_proto)
         self.ws_proto.set_binary_handler(self._on_binary_message)
+        self.ws_proto.client.on_text = self._on_text_message
         try:
             await self.ws_proto.connect()
         except Exception as e:
@@ -52,21 +54,30 @@ class NetworkClient:
             return
 
         logging.info("WebSocket connected, sending protocol negotiation...")
-        cap_writer = BinaryWriter()
-        cap_writer.write_uint8(1)
-        cap_writer.write_uint8(1)
-        cap_writer.write_uint8(0)
-        cap_writer.write_uint32(10 * 1024 * 1024)
-        cap_writer.write_uint16(len(MessageType))
-        for mt in MessageType:
-            cap_writer.write_uint16(mt.value)
+        if self.protocol == "binary":
+            # Send binary protocol capabilities
+            cap_writer = BinaryWriter()
+            cap_writer.write_uint8(1)
+            cap_writer.write_uint8(1)
+            cap_writer.write_uint8(0)
+            cap_writer.write_uint32(10 * 1024 * 1024)
+            cap_writer.write_uint16(len(MessageType))
+            for mt in MessageType:
+                cap_writer.write_uint16(mt.value)
 
-        msg = self.binary_proto.create_message(
-            MessageType.PROTOCOL_NEGOTIATION,
-            cap_writer.get_buffer(),
-            flags=ProtocolFlags.RELIABLE
-        )
-        await self.ws_proto.send_binary_message(msg.serialize())
+            msg = self.binary_proto.create_message(
+                MessageType.PROTOCOL_NEGOTIATION,
+                cap_writer.get_buffer(),
+                flags=ProtocolFlags.RELIABLE
+            )
+            await self.ws_proto.send_binary_message(msg.serialize())
+        else:
+            # For WebSocket JSON protocol, just send a welcome message
+            await self.ws_proto.send_json({
+                "type": "protocol_negotiation",
+                "protocol": "websocket",
+                "version": 1
+            })
         logging.info("Protocol negotiation sent")
 
         asyncio.create_task(self._process_requests())
@@ -89,15 +100,24 @@ class NetworkClient:
                 logging.error(f"Request processing error: {e}")
 
     async def _request_chunk_async(self, cx: int, cz: int):
-        writer = BinaryWriter()
-        writer.write_int32(cx)
-        writer.write_int32(cz)
-        msg = self.binary_proto.create_message(
-            MessageType.CHUNK_REQUEST,
-            writer.get_buffer(),
-            flags=ProtocolFlags.RELIABLE
-        )
-        await self.ws_proto.send_binary_message(msg.serialize())
+        if self.protocol == "binary":
+            writer = BinaryWriter()
+            writer.write_int32(cx)
+            writer.write_int32(cz)
+            msg = self.binary_proto.create_message(
+                MessageType.CHUNK_REQUEST,
+                writer.get_buffer(),
+                flags=ProtocolFlags.RELIABLE
+            )
+            await self.ws_proto.send_binary_message(msg.serialize())
+        else:
+            # JSON request
+            await self.ws_proto.send_json({
+                "type": "world_chunk_request",
+                "chunkX": cx,
+                "chunkZ": cz,
+                "lod": 0
+            })
         logging.debug(f"Requested chunk ({cx},{cz})")
 
     async def _on_binary_message(self, data: bytes):
@@ -133,9 +153,33 @@ class NetworkClient:
             elif msg.header.message_type == MessageType.ERROR:
                 logging.error("Server error: " + msg.payload.decode('utf-8', errors='replace'))
             else:
-                logging.warning(f"Unhandled message type {msg.header.message_type}")
+                logging.warning(f"Unhandled binary message type {msg.header.message_type}")
         except Exception as e:
             logging.error(f"Failed to process binary message: {e}")
+
+    async def _on_text_message(self, text: str):
+        """Handle JSON text messages from the server."""
+        try:
+            import json
+            data = json.loads(text)
+            msg_type = data.get("type")
+            if msg_type == "world_chunk":
+                cx = data.get("chunkX", 0)
+                cz = data.get("chunkZ", 0)
+                chunk_data = data.get("data", {})
+                vertices = numpy.array(chunk_data.get("vertices", []), dtype=numpy.float32).reshape(-1, 6)
+                indices = numpy.array(chunk_data.get("indices", []), dtype=numpy.uint32)
+                trees = chunk_data.get("trees", [])
+                self._response_queue.put((cx, cz, vertices, indices, trees))
+                logging.debug(f"Received JSON chunk ({cx},{cz}) with {len(vertices)} vertices")
+            elif msg_type == "error":
+                logging.error(f"Server error: {data.get('message', 'Unknown error')}")
+            elif msg_type == "success":
+                logging.info(f"Server success: {data.get('message', '')}")
+            else:
+                logging.debug(f"Unhandled JSON message type: {msg_type}")
+        except Exception as e:
+            logging.error(f"Failed to parse JSON message: {e}")
 
     def request_chunk(self, cx: int, cz: int):
         self._request_queue.put((cx, cz))

@@ -5,12 +5,13 @@ import multiprocessing as mp
 import queue
 import math
 import random
+import time
 
 from OpenGL.GL import *
 
-from network import NetworkClient
 from camera import get_height
 from portal import Portal
+from network.client import NetworkClient
 
 
 def generate_portal(cx, cz, world_origin_x, world_origin_z, phys_width, phys_height, rng):
@@ -234,27 +235,26 @@ class Chunk:
 
 class ChunkManager:
     def __init__(self, chunk_size=32, load_radius=3, spacing=1.0,
-                 use_multiprocessing=True, player=None, network_mode=False, server_url=''):
+                 player=None, network_mode=False, server_url=''):
         self.chunk_size = chunk_size
         self.load_radius = load_radius
         self.spacing = spacing
         self.serializer = player.serializer if player else None
         self.chunks = {}
         self.pending_requests = set()
+        self.generator = ChunkGenerator(chunk_size, spacing)
         self.network_mode = network_mode
         self.network_client = None
-        if network_mode and server_url:
+        if network_mode:
             self.network_client = NetworkClient(server_url)
-        if use_multiprocessing:
-            self.generator = ChunkGenerator(chunk_size, spacing)
-        else:
-            self.generator = None
         if player:
             phys_size = (chunk_size - 1) * spacing
             player_cx = int(player.position[0] // phys_size)
             player_cz = int(player.position[2] // phys_size)
             self.load_chunks_around(player_cx, player_cz)
         self.first_running = True
+        self.pending_request_time = {}
+        self.request_timeout = 1.0
 
     def _generate_sync(self, cx, cz):
         cx, cz, vertices, indices, stones, trees, portal = generate_chunk_data(cx, cz, self.chunk_size, self.spacing)
@@ -314,11 +314,15 @@ class ChunkManager:
                 self.chunks.pop(key).delete()
 
         self.pending_requests = {req for req in self.pending_requests if req in needed}
+        for key in list(self.pending_request_time.keys()):
+            if key not in self.pending_requests:
+                self.pending_request_time.pop(key, None)
 
         for key in needed:
             if key not in self.chunks and key not in self.pending_requests:
                 if self.network_mode and self.network_client:
                     self.pending_requests.add(key)
+                    self.pending_request_time[key] = time.time()
                     self.network_client.request_chunk(*key)
                 elif self.first_running and self.serializer:
                     self.first_running = not self.first_running
@@ -334,17 +338,39 @@ class ChunkManager:
 
         if self.network_client:
             for data in self.network_client.get_completed():
-                cx, cz, vertices, indices, stones, trees = data
+                if data is None:
+                    continue
+                cx, cz, vertices, indices, trees = data
                 key = (cx, cz)
-                if key in self.pending_requests and key in needed:
+                if key in self.pending_requests:
                     self.pending_requests.discard(key)
+                    self.pending_request_time.pop(key, None)
                     if vertices is not None:
-                        chunk = Chunk(cx, cz, vertices, indices, stones, trees)
+                        chunk = Chunk(cx, cz, vertices, indices, stones=[], trees=trees, portal=None)
                         self.chunks[key] = chunk
                         if self.serializer:
-                            self.serializer.save_chunk(chunk.portal_name, cx, cz, vertices, indices, stones, trees)
+                            self.serializer.save_chunk(None, cx, cz, vertices, indices, [], trees)
+                        logging.debug(f"Received chunk {key} from network")
+                    else:
+                        logging.warning(f"Network returned empty data for chunk {key}, falling back to local generation")
+                        if self.generator:
+                            self.generator.request_chunk(*key)
+                        else:
+                            self.chunks[key] = self._generate_sync(*key)
                 else:
                     self.pending_requests.discard(key)
+                    self.pending_request_time.pop(key, None)
+
+        now = time.time()
+        for key in list(self.pending_requests):
+            if key in self.pending_request_time and now - self.pending_request_time[key] > self.request_timeout:
+                logging.warning(f"Chunk {key} request timed out after {self.request_timeout}s, falling back to local generation")
+                self.pending_requests.discard(key)
+                self.pending_request_time.pop(key, None)
+                if self.generator:
+                    self.generator.request_chunk(*key)
+                else:
+                    self.chunks[key] = self._generate_sync(*key)
 
         if self.generator:
             for data in self.generator.get_completed():
@@ -352,9 +378,11 @@ class ChunkManager:
                 key = (cx, cz)
                 if key in self.pending_requests and key in needed:
                     self.pending_requests.discard(key)
+                    self.pending_request_time.pop(key, None)
                     self.chunks[key] = Chunk(cx, cz, vertices, indices, stones, trees, portal)
                 else:
                     self.pending_requests.discard(key)
+                    self.pending_request_time.pop(key, None)
 
     def draw(self, shader):
         for chunk in self.chunks.values():

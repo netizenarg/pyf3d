@@ -14,8 +14,13 @@ class Tab:
         """Assign positions to all widgets in a vertical list."""
         current_y = y
         for w in self.widgets:
-            # All widgets span the full width
-            w.rect = (x, current_y, width, row_height)
+            # If the widget has its own layout method, call it
+            if hasattr(w, 'layout') and callable(w.layout):
+                w.layout(x, current_y, width, row_height, spacing)
+            else:
+                # Otherwise, set the standard rect attribute
+                w.rect = (x, current_y, width, row_height)
+            # Special handling for NumberBox to update its buttons
             if isinstance(w, NumberBox):
                 w._update_button_rects()
             current_y += row_height + spacing

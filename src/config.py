@@ -60,6 +60,7 @@ class Config:
         "db_path": "data.db",
         "network_mode": False,
         "server_url": "http://localhost:8080",
+        "protocol": "binary",
         "mouse_sensitivity": 1.0,
         "movement_speed": 10.0,
         "jump_force": 8.0,

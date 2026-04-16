@@ -4,18 +4,35 @@ import ctypes
 import glfw
 
 from OpenGL.GL import *
-from OpenGL.GL.shaders import compileProgram, compileShader
 
 import config
+from shaders.shader import Shader
 from shaders.gui_shdr import *
 from gui.font import FONT_BITMAPS
 from gui.widget import Widget
+from gui.label import Label
 from gui.checkbox import CheckBox
 from gui.numberbox import NumberBox
+from gui.dropdown import Dropdown
 from gui.tabs import Tab
 
 
-class DialogSettings:
+# Server URL dropdown
+SERVER_URL_OPTIONS = [
+    ("Local (8080)", "http://localhost:8080"),
+    ("Local (9999)", "localhost:9999"),
+    ("Official Server", "https://game.example.com"),
+    ("Custom (edit config)", "")
+]
+
+# Protocol options
+PROTOCOL_OPTIONS = [
+    ("Binary (recommended)", "binary"),
+    ("WebSocket (JSON)", "websocket"),
+]
+
+
+class DialogSettings(Widget):
     def __init__(self, window, screen_width, screen_height, config_dict, camera, player=None,
                  stats_panel=None, fps_overlay=None, compass=None, player_ai=None):
         self.window = window
@@ -62,15 +79,20 @@ class DialogSettings:
         self.tabs = []
         self._build_tabs()
 
+        # Set current server URL in dropdown and protocol
+        current_url = self.config.get("server_url", "http://localhost:8080")
+        current_protocol = self.config.get("protocol", "binary")
+        for tab in self.tabs:
+            if tab.name == "Network":
+                for widget in tab.widgets:
+                    if isinstance(widget, Dropdown) and widget.key == "server_url":
+                        widget.set_value(current_url)
+                    elif isinstance(widget, Dropdown) and widget.key == "protocol":
+                        widget.set_value(current_protocol)
+
         # Shaders and common geometry
-        self.rect_shader = compileProgram(
-            compileShader(RECT_VERTEX_SHADER, GL_VERTEX_SHADER),
-            compileShader(RECT_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
-        )
-        self.text_shader = compileProgram(
-            compileShader(TEXT_VERTEX_SHADER, GL_VERTEX_SHADER),
-            compileShader(TEXT_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
-        )
+        self.rect_shader = Shader(RECT_VERTEX_SHADER, RECT_FRAGMENT_SHADER)
+        self.text_shader = Shader(TEXT_VERTEX_SHADER, TEXT_FRAGMENT_SHADER)
 
         # Common quad VAO (position + texcoord) with indices
         quad_verts = numpy.array([
@@ -106,17 +128,17 @@ class DialogSettings:
         self._relayout()
 
     def _cache_uniforms(self):
-        self.rect_uScreenSize = glGetUniformLocation(self.rect_shader, "uScreenSize")
-        self.rect_uColor = glGetUniformLocation(self.rect_shader, "uColor")
-        self.rect_uOffset = glGetUniformLocation(self.rect_shader, "uOffset")
-        self.rect_uScale = glGetUniformLocation(self.rect_shader, "uScale")
+        self.rect_uScreenSize = self.rect_shader.getUniformLocation("uScreenSize")
+        self.rect_uColor = self.rect_shader.getUniformLocation("uColor")
+        self.rect_uOffset = self.rect_shader.getUniformLocation("uOffset")
+        self.rect_uScale = self.rect_shader.getUniformLocation("uScale")
 
-        self.text_uScreenSize = glGetUniformLocation(self.text_shader, "uScreenSize")
-        self.text_uColor = glGetUniformLocation(self.text_shader, "uColor")
-        self.text_uOffset = glGetUniformLocation(self.text_shader, "uOffset")
-        self.text_uScale = glGetUniformLocation(self.text_shader, "uScale")
-        self.text_uTexRect = glGetUniformLocation(self.text_shader, "uTexRect")
-        self.text_uFontTexture = glGetUniformLocation(self.text_shader, "uFontTexture")
+        self.text_uScreenSize = self.text_shader.getUniformLocation("uScreenSize")
+        self.text_uColor = self.text_shader.getUniformLocation("uColor")
+        self.text_uOffset = self.text_shader.getUniformLocation("uOffset")
+        self.text_uScale = self.text_shader.getUniformLocation("uScale")
+        self.text_uTexRect = self.text_shader.getUniformLocation("uTexRect")
+        self.text_uFontTexture = self.text_shader.getUniformLocation("uFontTexture")
 
     def _build_tabs(self):
         # Helper callbacks
@@ -144,9 +166,6 @@ class DialogSettings:
         def update_snow_draw(val):
             # handled by sky; can be updated on next frame
             pass
-        def update_network_mode(val):
-            # Changing network mode requires restart; just log
-            logging.info(f"Network mode changed to {val} – restart required for full effect")
         def update_camera_mode(val):
             # val is bool: True = third person (mode 1), False = first person (mode 0)
             new_mode = 1 if val else 0
@@ -167,6 +186,16 @@ class DialogSettings:
         core.add_widget(CheckBox("Draw Compass", "draw_compass", 0,0,20,20, update_draw_compass))
         core.add_widget(CheckBox("Draw Fog", "draw_fog", 0,0,20,20, update_draw_fog))
         core.add_widget(CheckBox("Snow Draw", "snow_draw", 0,0,20,20, update_snow_draw))
+
+        # Load radius (1..5)
+        def on_load_radius_change(val):
+            self.config["load_radius"] = int(val)
+            # No live update – requires restart
+            logging.info(f"Load radius changed to {val}. Restart required for full effect.")
+
+        core.add_widget(NumberBox("Load Radius", "load_radius", 0,0,0,0,
+                                    1, 5, 1, on_load_radius_change))
+
         self.tabs.append(core)
 
         # ---- Player tab ----
@@ -184,7 +213,41 @@ class DialogSettings:
 
         # ---- Network tab ----
         net_tab = Tab("Network")
+
+        def update_network_mode(value):
+            self.config["network_mode"] = value
+            logging.info(f"Network mode changed to '{value}' – restart required for full effect")
+
         net_tab.add_widget(CheckBox("Network Mode", "network_mode", 0,0,20,20, update_network_mode))
+
+        def on_server_url_change(value):
+            if value:
+                self.config["server_url"] = value
+                logging.info(f"Server URL changed to {value}. Restart required.")
+
+        server_dropdown = Dropdown("Server URL", "server_url", 0,0,0,0,
+                                SERVER_URL_OPTIONS, on_server_url_change)
+        net_tab.add_widget(server_dropdown)
+
+        # Protocol dropdown
+        def on_protocol_change(value):
+            self.config["protocol"] = value
+            logging.info(f"Protocol changed to '{value}'. Restart required.")
+
+        protocol_dropdown = Dropdown("Protocol", "protocol", 0, 0, 0, 0,
+                                     PROTOCOL_OPTIONS, on_protocol_change)
+        net_tab.add_widget(protocol_dropdown)
+
+        # Show current URL and protocol as read-only labels
+        def get_current_url():
+            return self.config.get("server_url", "unknown")
+        net_tab.add_widget(Label("Current URL", "current_url", 0,0,0,0, getter=get_current_url))
+
+        def get_current_protocol():
+            return self.config.get("protocol", "binary")
+        net_tab.add_widget(Label("Current Protocol", "current_protocol", 0,0,0,0,
+                                 getter=get_current_protocol))
+
         self.tabs.append(net_tab)
 
     def _relayout(self):
@@ -297,7 +360,7 @@ class DialogSettings:
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
         # Draw background panel
-        glUseProgram(self.rect_shader)
+        self.rect_shader.use()
         glUniform2f(self.rect_uScreenSize, self.width, self.height)
         self._draw_rect(self.panel_x, self.panel_y, self.panel_w, self.panel_h, (0.2,0.2,0.2,0.8))
 
@@ -349,7 +412,7 @@ class DialogSettings:
 
     def _draw_rect(self, x, y, w, h, color):
         """Draw a rectangle with given color (r,g,b,a) using top‑origin coordinates."""
-        glUseProgram(self.rect_shader)
+        self.rect_shader.use()
         glUniform2f(self.rect_uScreenSize, self.width, self.height)
         glUniform4f(self.rect_uColor, *color)
         y_bottom = self.height - (y + h)
@@ -361,7 +424,7 @@ class DialogSettings:
 
     def _draw_text(self, text, x, y, size, color=(1,1,1,1), uppercase=False):
         """Draw text with given color, top‑origin coordinates, y is baseline (center)."""
-        glUseProgram(self.text_shader)
+        self.text_shader.use()
         glUniform2f(self.text_uScreenSize, self.width, self.height)
         glUniform3f(self.text_uColor, color[0], color[1], color[2])
         glActiveTexture(GL_TEXTURE0)

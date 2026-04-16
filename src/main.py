@@ -90,7 +90,8 @@ def main():
 
     db_path = config.get("db_path", "data.db")
     network_mode = config.get("network_mode", False)
-    server_url = config.get("server_url", "http://localhost:8080")
+    server_host = config.get("server_host", "localhost")
+    server_port = config.get("server_port", 9999)
     mouse_sensitivity = config.get("mouse_sensitivity", 1.0)
     movement_speed = config.get("movement_speed", 10.0)
     jump_force = config.get("jump_force", 8.0)
@@ -118,6 +119,17 @@ def main():
     max_visible_dist = (chunk_size - 1) * (load_radius + 0.5)
     fog_start = max_visible_dist * 0.6   # 13.5
     fog_end = max_visible_dist * 0.9     # 20.25
+
+    # Check protocol and URL compatibility
+    server_url = "localhost:9999"
+    if network_mode:
+        protocol = config.get("protocol", "binary")
+        match protocol:
+            case 'binary':
+                server_url = f'{server_host}:{server_port}'
+            case 'websocket':
+                server_url = f'ws://{server_host}:{server_port}'
+        logging.info(f'Connect will to {server_url}')
 
     audio = Audio()
 
@@ -277,12 +289,21 @@ def main():
 
     keys = {}
 
-    # Mouse scroll callback
+    def char_callback(window, codepoint):
+        char = chr(codepoint)
+        if dialog_settings.active:
+            if dialog_settings.handle_key(0, char):
+                return
+    glfw.set_char_callback(window, char_callback)
+
     def scroll_callback(window, xoffset, yoffset):
         dialog_portals.handle_scroll(xoffset, yoffset)
     glfw.set_scroll_callback(window, scroll_callback)
 
     def key_callback(window, key, scancode, action, mods):
+        if dialog_settings.active:
+            if dialog_settings.handle_key(key, ''):
+                return
         if action == glfw.RELEASE:
             keys[key] = False
             if key == glfw.KEY_ESCAPE:

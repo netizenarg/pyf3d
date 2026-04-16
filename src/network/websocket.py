@@ -8,7 +8,7 @@ import struct
 import ssl
 import socket
 from enum import IntEnum
-from typing import Optional, Callable, Dict, Any, Tuple
+from typing import Optional, Callable, Any, Tuple
 
 
 class Opcode(IntEnum):
@@ -134,42 +134,61 @@ class WebSocketClient:
     async def connect(self):
         # Parse URL
         if self.url.startswith("ws://"):
-            port = 80
-            host = self.url[5:].split("/")[0]
-            path = "/" + "/".join(self.url[5:].split("/")[1:]) if "/" in self.url[5:] else "/"
+            rest = self.url[5:]
             use_ssl = False
+            default_port = 80
         elif self.url.startswith("wss://"):
-            port = 443
-            host = self.url[6:].split("/")[0]
-            path = "/" + "/".join(self.url[6:].split("/")[1:]) if "/" in self.url[6:] else "/"
+            rest = self.url[6:]
             use_ssl = True
+            default_port = 443
         else:
             raise ValueError("URL must start with ws:// or wss://")
 
-        # Resolve hostname with fallback for localhost
-        loop = asyncio.get_running_loop()
-        try:
-            addrs = await loop.getaddrinfo(host, port, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
-        except socket.gaierror:
-            if host == "localhost":
-                # Fallback to 127.0.0.1
-                logging.warning("localhost resolution failed, using 127.0.0.1")
-                addrs = await loop.getaddrinfo("127.0.0.1", port, family=socket.AF_INET, type=socket.SOCK_STREAM)
-            else:
-                raise
-
-        if not addrs:
-            raise ConnectionError(f"Cannot resolve {host}")
-
-        family, _, proto, _, sockaddr = addrs[0]
-
-        if use_ssl:
-            if self.ssl_context is None:
-                self.ssl_context = ssl.create_default_context()
-            self.reader, self.writer = await asyncio.open_connection(
-                host, port, ssl=self.ssl_context, server_hostname=host)
+        # Split host/path
+        if '/' in rest:
+            host_part, path = rest.split('/', 1)
+            path = '/' + path
         else:
-            self.reader, self.writer = await asyncio.open_connection(host, port)
+            host_part = rest
+            path = '/'
+
+        # Split host and port
+        if ':' in host_part:
+            # IPv6 address with brackets?
+            if host_part.startswith('['):
+                bracket_end = host_part.find(']')
+                if bracket_end == -1:
+                    raise ValueError("Invalid IPv6 address")
+                host = host_part[1:bracket_end]
+                if host_part[bracket_end+1:].startswith(':'):
+                    port_str = host_part[bracket_end+2:]
+                    port = int(port_str) if port_str else default_port
+                else:
+                    port = default_port
+            else:
+                # IPv4 or hostname with port
+                host, port_str = host_part.split(':', 1)
+                port = int(port_str)
+        else:
+            host = host_part
+            port = default_port
+
+        # Replace localhost with 127.0.0.1 to avoid DNS issues
+        if host == "localhost":
+            host = "127.0.0.1"
+            logging.debug("Replaced localhost with 127.0.0.1")
+
+        # Open connection
+        try:
+            if use_ssl:
+                if self.ssl_context is None:
+                    self.ssl_context = ssl.create_default_context()
+                self.reader, self.writer = await asyncio.open_connection(
+                    host, port, ssl=self.ssl_context, server_hostname=host)
+            else:
+                self.reader, self.writer = await asyncio.open_connection(host, port)
+        except Exception as e:
+            raise ConnectionError(f"Failed to connect {host}:{port}: {e}")
 
         # WebSocket handshake
         key = base64.b64encode(os.urandom(16)).decode()
@@ -179,7 +198,7 @@ class WebSocketClient:
 
         handshake = (
             f"GET {path} HTTP/1.1\r\n"
-            f"Host: {host}\r\n"
+            f"Host: {host}:{port}\r\n"
             f"Upgrade: websocket\r\n"
             f"Connection: Upgrade\r\n"
             f"Sec-WebSocket-Key: {key}\r\n"
@@ -189,17 +208,36 @@ class WebSocketClient:
         self.writer.write(handshake.encode())
         await self.writer.drain()
 
+        # Read HTTP response
         response = await self.reader.readuntil(b"\r\n\r\n")
         response_str = response.decode()
-        if "101" not in response_str.splitlines()[0]:
-            raise ConnectionError(f"Handshake failed: {response_str}")
 
-        for line in response_str.splitlines():
-            if line.lower().startswith("sec-websocket-accept:"):
-                accept = line.split(":", 1)[1].strip()
-                if accept != expected_accept:
-                    raise ConnectionError("Invalid accept key")
-                break
+        # Parse status line
+        lines = response_str.splitlines()
+        if not lines:
+            raise ConnectionError("Empty response")
+        status_line = lines[0]
+        if "101" not in status_line:
+            raise ConnectionError(f"Handshake failed: {status_line}")
+
+        # Parse headers (case‑insensitive)
+        headers = {}
+        for line in lines[1:]:
+            if ':' not in line:
+                continue
+            name, value = line.split(':', 1)
+            headers[name.strip().lower()] = value.strip()
+
+        accept = headers.get("sec-websocket-accept")
+        if not accept:
+            raise ConnectionError("Missing Sec-WebSocket-Accept header")
+
+        logging.debug(f"Server accept key: {accept}")
+        logging.debug(f"Expected accept key: {expected_accept}")
+
+        # Compare after normalizing (strip any extra whitespace)
+        if accept != expected_accept:
+            raise ConnectionError(f"Invalid accept key: expected '{expected_accept}', got '{accept}'")
 
         self._receive_task = asyncio.create_task(self._receive_loop())
 

@@ -3,7 +3,9 @@ import zlib
 from typing import Tuple
 from enum import IntEnum, IntFlag
 
-
+# ----------------------------------------------------------------------
+# Constants matching C++ BinaryProtocol.hpp
+# ----------------------------------------------------------------------
 class MessageType(IntEnum):
     INVALID = 0
     HEARTBEAT = 1
@@ -38,7 +40,6 @@ class MessageType(IntEnum):
     SYSTEM_MESSAGE = 701
     CUSTOM_EVENT = 1000
 
-
 class ProtocolFlags(IntFlag):
     COMPRESSED = 0x01
     ENCRYPTED = 0x02
@@ -47,14 +48,12 @@ class ProtocolFlags(IntFlag):
     PRIORITY_HIGH = 0x10
     PRIORITY_LOW = 0x20
 
-
 CURRENT_PROTOCOL_VERSION = 1
 MAX_MESSAGE_SIZE = 10 * 1024 * 1024
 
-
-# version, flags, msg_type, seq, timestamp, length, checksum
+# Header: version(1) + flags(1) + msg_type(2) + seq(4) + timestamp(4) + length(4) + checksum(4) = 20 bytes
 HEADER_FORMAT = '!BB H I I I I'
-HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+HEADER_SIZE = struct.calcsize(HEADER_FORMAT)  # = 20
 
 class NetworkHeader:
     __slots__ = ('version', 'flags', 'message_type', 'sequence', 'timestamp', 'length', 'checksum')
@@ -68,21 +67,23 @@ class NetworkHeader:
         self.length = 0
         self.checksum = 0
 
-        def pack(self) -> bytes:
-            return struct.pack(HEADER_FORMAT,
-                               self.version, self.flags, self.message_type,
-                               self.sequence, self.timestamp, self.length, self.checksum)
+    def pack(self) -> bytes:
+        return struct.pack(HEADER_FORMAT,
+                           self.version, self.flags, self.message_type,
+                           self.sequence, self.timestamp, self.length, self.checksum)
 
-        @classmethod
-        def unpack(cls, data: bytes) -> 'NetworkHeader':
-            (version, flags, msg_type, seq, ts, length, checksum) = struct.unpack(HEADER_FORMAT, data)
-            header = cls(msg_type, seq, version, flags)
-            header.timestamp = ts
-            header.length = length
-            header.checksum = checksum
-            return header
+    @classmethod
+    def unpack(cls, data: bytes) -> 'NetworkHeader':
+        (version, flags, msg_type, seq, ts, length, checksum) = struct.unpack(HEADER_FORMAT, data)
+        header = cls(msg_type, seq, version, flags)
+        header.timestamp = ts
+        header.length = length
+        header.checksum = checksum
+        return header
 
-
+# ----------------------------------------------------------------------
+# BinaryWriter (like C++ version)
+# ----------------------------------------------------------------------
 class BinaryWriter:
     def __init__(self):
         self.buffer = bytearray()
@@ -141,7 +142,9 @@ class BinaryWriter:
     def clear(self):
         self.buffer.clear()
 
-
+# ----------------------------------------------------------------------
+# BinaryReader (like C++ version)
+# ----------------------------------------------------------------------
 class BinaryReader:
     def __init__(self, data: bytes):
         self.data = data
@@ -226,7 +229,9 @@ class BinaryReader:
         s = self.read_string()
         return json.loads(s)
 
-
+# ----------------------------------------------------------------------
+# BinaryMessage (frame with header + payload)
+# ----------------------------------------------------------------------
 class BinaryMessage:
     def __init__(self, header: NetworkHeader = None, payload: bytes = b''):
         self.header = header or NetworkHeader()
@@ -276,11 +281,12 @@ class BinaryMessage:
 
         return cls(header, payload)
 
-
+# ----------------------------------------------------------------------
+# High-level protocol helper
+# ----------------------------------------------------------------------
 class ProtocolBinary:
     def __init__(self):
         self.next_sequence = 1
-        self.pending_acks = {}   # seq -> timestamp
 
     def create_message(self, msg_type: int, payload: bytes, flags: int = 0, reliable: bool = False) -> BinaryMessage:
         header = NetworkHeader(message_type=msg_type, sequence=self.next_sequence, flags=flags)
@@ -288,6 +294,3 @@ class ProtocolBinary:
             header.flags |= ProtocolFlags.RELIABLE
         self.next_sequence += 1
         return BinaryMessage(header, payload)
-
-    def send_message(self, writer, msg: BinaryMessage):
-        writer.write(msg.serialize())

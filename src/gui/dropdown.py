@@ -2,15 +2,15 @@ from gui.widget import Widget
 
 
 class Dropdown(Widget):
-    """Simple dropdown widget (combo box)."""
-    def __init__(self, label, key, x, y, w, h, options, callback=None):
+    def __init__(self, label, key, x, y, w, h, options, callback=None, label_width=80):
         self.label = label
         self.key = key
         self.x = x
         self.y = y
         self.w = w
         self.h = h
-        self.options = options          # list of (display_text, value)
+        self.label_width = label_width
+        self.options = options
         self.callback = callback
         self.selected_index = 0
         self.expanded = False
@@ -35,7 +35,6 @@ class Dropdown(Widget):
             self.expanded = not self.expanded
             return True
         if self.expanded:
-            # check options
             opt_y = self.y + self.h
             for i, (text, _) in enumerate(self.options):
                 if self.x <= mx <= self.x + self.w and opt_y <= my <= opt_y + self.h:
@@ -48,20 +47,17 @@ class Dropdown(Widget):
         return False
 
     def draw(self, dialog):
-        # draw label
         dialog._draw_text(self.label, self.x, self.y + 5, 12, color=(1,1,1,1))
-        # draw box
-        dialog._draw_rect(self.x + 80, self.y, self.w - 80, self.h, (0.3,0.3,0.3,0.9))
-        # draw selected value
+        box_x = self.x + self.label_width
+        box_w = self.w - self.label_width
+        dialog._draw_rect(box_x, self.y, box_w, self.h, (1,1,1,0.95))
         selected_text = self.options[self.selected_index][0]
-        dialog._draw_text(selected_text, self.x + 85, self.y + 5, 12, color=(1,1,1,1))
-        # draw arrow
-        arrow_x = self.x + self.w - 15
-        dialog._draw_text("▼", arrow_x, self.y + 3, 14, color=(1,1,1,1))
-        # if expanded, draw options
+        dialog._draw_text(selected_text, box_x + 5, self.y + 5, 12, color=(0,0,0,1))
+        arrow_x = box_x + box_w - 15
+        dialog._draw_text("▼", arrow_x, self.y + 3, 14, color=(0,0,0,1))
         if self.expanded:
             opt_y = self.y + self.h
             for text, _ in self.options:
-                dialog._draw_rect(self.x + 80, opt_y, self.w - 80, self.h, (0.2,0.2,0.2,0.95))
-                dialog._draw_text(text, self.x + 85, opt_y + 5, 12, color=(1,1,1,1))
+                dialog._draw_rect(box_x, opt_y, box_w, self.h, (1,1,1,0.95))
+                dialog._draw_text(text, box_x + 5, opt_y + 5, 12, color=(0,0,0,1))
                 opt_y += self.h

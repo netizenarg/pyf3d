@@ -13,17 +13,10 @@ from gui.widget import Widget
 from gui.label import Label
 from gui.checkbox import CheckBox
 from gui.numberbox import NumberBox
+from gui.textbox import TextBox
 from gui.dropdown import Dropdown
 from gui.tabs import Tab
 
-
-# Server URL dropdown
-SERVER_URL_OPTIONS = [
-    ("Local (8080)", "http://localhost:8080"),
-    ("Local (9999)", "localhost:9999"),
-    ("Official Server", "https://game.example.com"),
-    ("Custom (edit config)", "")
-]
 
 # Protocol options
 PROTOCOL_OPTIONS = [
@@ -52,10 +45,10 @@ class DialogSettings(Widget):
         self.panel_x = 50
         self.panel_y = 50
         self.panel_w = 550
-        self.panel_h = 400
+        self.panel_h = 500
         self.title_height = 40
         self.tab_header_height = 30
-        self.bottom_margin = 60   # space for Save button
+        self.bottom_margin = 60
 
         # Title and close button
         self.title_text = "Settings"
@@ -141,7 +134,6 @@ class DialogSettings(Widget):
         self.text_uFontTexture = self.text_shader.getUniformLocation("uFontTexture")
 
     def _build_tabs(self):
-        # Helper callbacks
         def update_mouse_sens(val):
             self.camera.mouse_sensitivity = val
         def update_move_speed(val):
@@ -161,13 +153,10 @@ class DialogSettings(Widget):
             if self.compass:
                 self.compass.enabled = val
         def update_draw_fog(val):
-            # fog handled in main loop via config
             pass
         def update_snow_draw(val):
-            # handled by sky; can be updated on next frame
             pass
         def update_camera_mode(val):
-            # val is bool: True = third person (mode 1), False = first person (mode 0)
             new_mode = 1 if val else 0
             if self.camera:
                 self.camera.set_mode(new_mode)
@@ -181,20 +170,19 @@ class DialogSettings(Widget):
                                        1.0, 50.0, 1.0, update_move_speed))
         core.add_widget(NumberBox("Player Height", "player_height", 0,0,0,0,
                                        0.5, 5.0, 0.1, update_player_height))
+
+        def on_load_radius_change(val):
+            self.config["load_radius"] = int(val)
+            logging.info(f"Load radius changed to {val}. Restart required for full effect.")
+
+        core.add_widget(NumberBox("Load Radius", "load_radius", 0,0,0,0,
+                                    1, 5, 1, on_load_radius_change))
+
         core.add_widget(CheckBox("Show FPS", "show_fps", 0,0,20,20, update_show_fps))
         core.add_widget(CheckBox("Draw Stats", "draw_stats", 0,0,20,20, update_draw_stats))
         core.add_widget(CheckBox("Draw Compass", "draw_compass", 0,0,20,20, update_draw_compass))
         core.add_widget(CheckBox("Draw Fog", "draw_fog", 0,0,20,20, update_draw_fog))
         core.add_widget(CheckBox("Snow Draw", "snow_draw", 0,0,20,20, update_snow_draw))
-
-        # Load radius (1..5)
-        def on_load_radius_change(val):
-            self.config["load_radius"] = int(val)
-            # No live update – requires restart
-            logging.info(f"Load radius changed to {val}. Restart required for full effect.")
-
-        core.add_widget(NumberBox("Load Radius", "load_radius", 0,0,0,0,
-                                    1, 5, 1, on_load_radius_change))
 
         self.tabs.append(core)
 
@@ -216,72 +204,50 @@ class DialogSettings(Widget):
 
         def update_network_mode(value):
             self.config["network_mode"] = value
-            logging.info(f"Network mode changed to '{value}' – restart required for full effect")
+            #logging.debug(f"Network mode changed to '{value}' – restart required")
 
         net_tab.add_widget(CheckBox("Network Mode", "network_mode", 0,0,20,20, update_network_mode))
 
-        def on_server_url_change(value):
-            if value:
-                self.config["server_url"] = value
-                logging.info(f"Server URL changed to {value}. Restart required.")
+        def on_host_change(value):
+            self.config["server_host"] = value
+            #logging.debug(f"Server host changed to {value}. Restart required.")
 
-        server_dropdown = Dropdown("Server URL", "server_url", 0,0,0,0,
-                                SERVER_URL_OPTIONS, on_server_url_change)
-        net_tab.add_widget(server_dropdown)
+        host_field = TextBox("Server Host", "server_host", 0,0,0,0, on_host_change, label_width=130)
+        host_field.set_text(self.config.get("server_host", "localhost"))
+        net_tab.add_widget(host_field)
 
-        # Protocol dropdown
+        def on_port_change(val):
+            self.config["server_port"] = int(val)
+            #logging.debug(f"Server port changed to {val}. Restart required.")
+
+        port_box = NumberBox("Server Port", "server_port", 0,0,0,0,
+                            1, 65535, 1, on_port_change, mode='integer')
+        net_tab.add_widget(port_box)
+
         def on_protocol_change(value):
             self.config["protocol"] = value
-            logging.info(f"Protocol changed to '{value}'. Restart required.")
+            #logging.debug(f"Protocol changed to '{value}'. Restart required.")
 
-        protocol_dropdown = Dropdown("Protocol", "protocol", 0, 0, 0, 0,
-                                     PROTOCOL_OPTIONS, on_protocol_change)
+        protocol_dropdown = Dropdown("Protocol", "protocol", 0,0,0,0,
+                                    PROTOCOL_OPTIONS, on_protocol_change, label_width=100)
         net_tab.add_widget(protocol_dropdown)
-
-        # Show current URL and protocol as read-only labels
-        def get_current_url():
-            return self.config.get("server_url", "unknown")
-        net_tab.add_widget(Label("Current URL", "current_url", 0,0,0,0, getter=get_current_url))
-
-        def get_current_protocol():
-            return self.config.get("protocol", "binary")
-        net_tab.add_widget(Label("Current Protocol", "current_protocol", 0,0,0,0,
-                                 getter=get_current_protocol))
 
         self.tabs.append(net_tab)
 
     def _relayout(self):
-        """Compute positions of all UI elements after a resize."""
-        # Content area below title and tab headers
         content_y = self.panel_y + self.title_height + self.tab_header_height + 10
         content_h = self.panel_h - self.title_height - self.tab_header_height - self.bottom_margin
-        # Each widget row height
         row_h = 30
         spacing = 5
-        # Layout each tab's widgets in the content area
         for tab in self.tabs:
             tab.layout(self.panel_x + 10, content_y, self.panel_w - 20, row_h, spacing)
-
-        # Also reposition close and save buttons (they are not in tabs)
-        # Close button already defined with absolute coordinates; they depend on panel_x/w
         close_size = 30
         self.close_button = (
             self.panel_x + self.panel_w - close_size - 10,
             self.panel_y + (self.title_height - close_size) // 2,
-            close_size, close_size,
-            self.close
+            close_size, close_size, self.close
         )
-        self.save_button = (
-            self.panel_x + 10,
-            self.panel_y + self.panel_h - 40,
-            150, 30,
-            self.save
-        )
-
-    def resize(self, width, height):
-        self.width = width
-        self.height = height
-        self._relayout()
+        self.save_button = (self.panel_x+10, self.panel_y+self.panel_h-40, 150, 30, self.save)
 
     def _create_font_texture(self):
         cols = 16
@@ -310,6 +276,16 @@ class DialogSettings(Widget):
         glBindTexture(GL_TEXTURE_2D, 0)
         return tex_id
 
+    def handle_key(self, key, char):
+        if 0 <= self.active_tab_index < len(self.tabs):
+            return self.tabs[self.active_tab_index].handle_key(key, char, self)
+        return False
+
+    def resize(self, width, height):
+        self.width = width
+        self.height = height
+        self._relayout()
+
     def close(self):
         self.active = False
         if self.window:
@@ -324,29 +300,24 @@ class DialogSettings(Widget):
     def handle_mouse(self, xpos, ypos, button):
         if not self.active or button != glfw.MOUSE_BUTTON_LEFT:
             return False
-        # Check close button
         cx, cy, cw, ch, action = self.close_button
         if cx <= xpos <= cx + cw and cy <= ypos <= cy + ch:
             action()
             return True
-        # Check save button
         sx, sy, sw, sh, action = self.save_button
         if sx <= xpos <= sx + sw and sy <= ypos <= sy + sh:
             action()
             return True
-        # Check tab headers
         header_y = self.panel_y + self.title_height
         header_h = self.tab_header_height
         tab_x = self.panel_x + 10
         for i, tab in enumerate(self.tabs):
-            # Simple tab width based on text length
-            text_width = len(tab.name) * 12  # approximate
+            text_width = len(tab.name) * 12
             tab_w = text_width + 20
             if tab_x <= xpos <= tab_x + tab_w and header_y <= ypos <= header_y + header_h:
                 self.active_tab_index = i
                 return True
             tab_x += tab_w + 5
-        # Forward to active tab's widgets
         if 0 <= self.active_tab_index < len(self.tabs):
             return self.tabs[self.active_tab_index].handle_mouse(xpos, ypos, self)
         return False
@@ -385,7 +356,7 @@ class DialogSettings(Widget):
                             color=(1,1,1,1))
             tab_x += tab_w + 5
 
-        # Draw active tab widgets
+        # active tab widgets
         if 0 <= self.active_tab_index < len(self.tabs):
             self.tabs[self.active_tab_index].draw(self)
 
@@ -411,7 +382,6 @@ class DialogSettings(Widget):
         glEnable(GL_DEPTH_TEST)
 
     def _draw_rect(self, x, y, w, h, color):
-        """Draw a rectangle with given color (r,g,b,a) using top‑origin coordinates."""
         self.rect_shader.use()
         glUniform2f(self.rect_uScreenSize, self.width, self.height)
         glUniform4f(self.rect_uColor, *color)
@@ -423,7 +393,6 @@ class DialogSettings(Widget):
         glBindVertexArray(0)
 
     def _draw_text(self, text, x, y, size, color=(1,1,1,1), uppercase=False):
-        """Draw text with given color, top‑origin coordinates, y is baseline (center)."""
         self.text_shader.use()
         glUniform2f(self.text_uScreenSize, self.width, self.height)
         glUniform3f(self.text_uColor, color[0], color[1], color[2])

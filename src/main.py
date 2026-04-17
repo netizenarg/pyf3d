@@ -30,6 +30,8 @@ from camera import get_height
 from config import Config
 from media.audio import Audio
 from network.client import NetworkClient
+from gui.login import show_login_dialog
+from gui.msgbox import MessageBox
 from gui.settings import DialogSettings
 from gui.portals import DialogPortals
 from gui.stats import StatsPanel
@@ -83,8 +85,11 @@ def generate_window_icon():
     return (icon_size, icon_size, pixels)
 
 
-
 def main():
+
+    if not glfw.init():
+        sys.exit("Failed to initialize GLFW")
+
     config = Config.load()
 
     setup_logging(config.get('log_config', {}))
@@ -93,6 +98,8 @@ def main():
     network_mode = config.get("network_mode", False)
     server_host = config.get("server_host", "localhost")
     server_port = config.get("server_port", 9999)
+    login = config.get("login", "player1")
+    password = config.get("password", "")
     mouse_sensitivity = config.get("mouse_sensitivity", 1.0)
     movement_speed = config.get("movement_speed", 10.0)
     jump_force = config.get("jump_force", 8.0)
@@ -121,18 +128,55 @@ def main():
     fog_start = max_visible_dist * 0.6   # 13.5
     fog_end = max_visible_dist * 0.9     # 20.25
 
+    glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
+    glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
+    glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+
+    window = glfw.create_window(screen.width, screen.height, "FPS Shooter - Infinite Terrain", None, None)
+    if not window:
+        glfw.terminate()
+        sys.exit("Failed to create window")
+    if glfw.get_platform() != glfw.PLATFORM_WAYLAND:
+        glfw.set_window_icon(window, 1, [generate_window_icon()])
+
+    glfw.make_context_current(window)
+    glViewport(0, 0, screen.width, screen.height)
+    glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
+    glEnable(GL_DEPTH_TEST)
+
     network_client = None
     server_url = "localhost:9999"
+    login_cancelled = False
+
     if network_mode:
-        protocol = config.get("protocol", "binary")
-        match protocol:
-            case 'binary':
-                server_url = f'{server_host}:{server_port}'
-            case 'websocket':
-                server_url = f'ws://{server_host}:{server_port}'
-        logging.info(f'Connect will to: {server_url}')
-        logging.info(f'Protocol type: {protocol}')
-        network_client = NetworkClient(server_url, protocol)
+        result = show_login_dialog(window, screen.width, screen.height, login, password)
+        if result is None:
+            login_cancelled = True
+            network_mode = False
+            logging.info("Login cancelled, switching to local mode")
+        else:
+            login, password = result
+            config["login"] = login
+            config["password"] = password
+            Config.save(config)
+            protocol = config.get("protocol", "binary")
+            match protocol:
+                case 'binary':
+                    server_url = f'{server_host}:{server_port}'
+                case 'websocket':
+                    server_url = f'ws://{server_host}:{server_port}'
+            logging.info(f'Connect will to: {server_url}')
+            logging.info(f'Protocol type: {protocol}')
+            logging.info(f'Player login: {login}')
+            #logging.debug(f'Player password: {password}')
+            try:
+                network_client = NetworkClient(server_url, protocol, login, password)
+            except Exception as e:
+                logging.error(f"Failed to create network client: {e}")
+                network_mode = False
+                network_client = None
+        if not login_cancelled:
+            glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
 
     audio = Audio()
 
@@ -152,25 +196,6 @@ def main():
                 rand_z = random.uniform(-random_range, random_range)
                 rand_y = get_height(rand_x, rand_z) + player.height
                 player.position = (rand_x, rand_y, rand_z)
-
-    if not glfw.init():
-        sys.exit("Failed to initialize GLFW")
-
-    glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
-    glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
-    glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-
-    window = glfw.create_window(screen.width, screen.height, "FPS Shooter - Infinite Terrain", None, None)
-    if not window:
-        glfw.terminate()
-        sys.exit("Failed to create window")
-    if glfw.get_platform() != glfw.PLATFORM_WAYLAND:
-        glfw.set_window_icon(window, 1, [generate_window_icon()])
-
-    glfw.make_context_current(window)
-    glViewport(0, 0, screen.width, screen.height)
-    glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
-    glEnable(GL_DEPTH_TEST)
 
     bounding_box = BoundingBox()
 

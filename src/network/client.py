@@ -16,19 +16,19 @@ from network.websocket import ProtocolWebsocket
 class NetworkClient:
     """Synchronous network client that runs asyncio in a background thread."""
 
-    def __init__(self, server_url: str, protocol: str = "binary"):
-        # Normalize URL: convert http(s):// to ws(s)://, add scheme if missing
+    def __init__(self, server_url: str, protocol: str = "binary", login: str = "", password: str = ""):
         if server_url.startswith("http://"):
             server_url = server_url.replace("http://", "ws://", 1)
         elif server_url.startswith("https://"):
             server_url = server_url.replace("https://", "wss://", 1)
         elif not (server_url.startswith("ws://") or server_url.startswith("wss://")):
             server_url = "ws://" + server_url
-        # Remove trailing slash if present
         if server_url.endswith("/"):
             server_url = server_url[:-1]
         self.server_url = server_url
         self.protocol = protocol
+        self.login = login
+        self.password = password
         self.binary_proto = ProtocolBinary()
         self._request_queue = queue.Queue()
         self._response_queue = queue.Queue()
@@ -39,8 +39,27 @@ class NetworkClient:
     def _run_async_loop(self):
         try:
             asyncio.run(self._async_main())
-        except Exception as e:
-            logging.error(f"NetworkClient background thread failed: {e}")
+        except Exception as err:
+            logging.error(f"NetworkClient background thread failed: {err}")
+
+    async def _authenticate(self):
+        if self.protocol == "binary":
+            writer = BinaryWriter()
+            writer.write_string(self.login)
+            writer.write_string(self.password)
+            msg = self.binary_proto.create_message(
+                MessageType.AUTHENTICATION,
+                writer.get_buffer(),
+                flags=ProtocolFlags.RELIABLE
+            )
+            await self.ws_proto.send_binary_message(msg.serialize())
+        else:
+            await self.ws_proto.send_json({
+                "type": "authentication",
+                "login": self.login,
+                "password": self.password
+            })
+        logging.info("Authentication request sent")
 
     async def _async_main(self):
         self.ws_proto = ProtocolWebsocket(self.server_url, self.binary_proto)
@@ -54,8 +73,7 @@ class NetworkClient:
             return
 
         logging.info("WebSocket connected, sending protocol negotiation...")
-        if self.protocol == "binary":
-            # Send binary protocol capabilities
+        if self.protocol == "binary": # Send binary protocol capabilities
             cap_writer = BinaryWriter()
             cap_writer.write_uint8(1)
             cap_writer.write_uint8(1)
@@ -71,14 +89,16 @@ class NetworkClient:
                 flags=ProtocolFlags.RELIABLE
             )
             await self.ws_proto.send_binary_message(msg.serialize())
-        else:
-            # For WebSocket JSON protocol, just send a welcome message
+        else: # For WebSocket JSON protocol, just send a welcome message
             await self.ws_proto.send_json({
                 "type": "protocol_negotiation",
                 "protocol": "websocket",
                 "version": 1
             })
         logging.info("Protocol negotiation sent")
+
+        if self.login:
+            await self._authenticate()
 
         asyncio.create_task(self._process_requests())
 
@@ -110,8 +130,8 @@ class NetworkClient:
                 flags=ProtocolFlags.RELIABLE
             )
             await self.ws_proto.send_binary_message(msg.serialize())
-        else:
-            # JSON request
+        else: # JSON request
+            logging.debug(f"Sending JSON chunk request: {cx},{cz}")
             await self.ws_proto.send_json({
                 "type": "world_chunk_request",
                 "chunkX": cx,
@@ -127,57 +147,77 @@ class NetworkClient:
             return
         try:
             msg = BinaryMessage.deserialize(data)
-            if msg.header.message_type == MessageType.CHUNK_DATA:
-                reader = BinaryReader(msg.payload)
-                cx = reader.read_int32()
-                cz = reader.read_int32()
-                vertices_data = reader.read_bytes(reader.read_uint32())
-                indices_data = reader.read_bytes(reader.read_uint32())
-                tree_count = reader.read_uint32()
-                vertices = numpy.frombuffer(vertices_data, dtype=numpy.float32).reshape(-1, 6)
-                indices = numpy.frombuffer(indices_data, dtype=numpy.uint32)
-                trees = []
-                for _ in range(tree_count):
-                    trees.append({
-                        'x': reader.read_float(),
-                        'z': reader.read_float(),
-                        'type': reader.read_uint8()
-                    })
-                self._response_queue.put((cx, cz, vertices, indices, trees))
-                logging.debug(f"Received chunk ({cx},{cz}) with {len(vertices)} vertices")
-            elif msg.header.message_type == MessageType.HEARTBEAT:
-                pong = self.binary_proto.create_message(MessageType.HEARTBEAT, b'')
-                await self.ws_proto.send_binary_message(pong.serialize())
-            elif msg.header.message_type == MessageType.SUCCESS:
-                logging.info("Server success: " + msg.payload.decode('utf-8', errors='replace'))
-            elif msg.header.message_type == MessageType.ERROR:
-                logging.error("Server error: " + msg.payload.decode('utf-8', errors='replace'))
-            else:
-                logging.warning(f"Unhandled binary message type {msg.header.message_type}")
+            match msg.header.message_type:
+                case MessageType.HEARTBEAT:
+                    pong = self.binary_proto.create_message(MessageType.HEARTBEAT, b'')
+                    await self.ws_proto.send_binary_message(pong.serialize())
+                case MessageType.CHUNK_DATA:
+                    reader = BinaryReader(msg.payload)
+                    cx = reader.read_int32()
+                    cz = reader.read_int32()
+                    vertices_data = reader.read_bytes(reader.read_uint32())
+                    indices_data = reader.read_bytes(reader.read_uint32())
+                    tree_count = reader.read_uint32()
+                    vertices = numpy.frombuffer(vertices_data, dtype=numpy.float32).reshape(-1, 6)
+                    indices = numpy.frombuffer(indices_data, dtype=numpy.uint32)
+                    trees = []
+                    for _ in range(tree_count):
+                        trees.append({
+                            'x': reader.read_float(),
+                            'z': reader.read_float(),
+                            'type': reader.read_uint8()
+                        })
+                    self._response_queue.put((cx, cz, vertices, indices, trees))
+                    logging.debug(f"Received chunk ({cx},{cz}) with {len(vertices)} vertices")
+                case MessageType.AUTHENTICATION:
+                    reader = BinaryReader(msg.payload)
+                    success = reader.read_uint8() != 0
+                    message = reader.read_string()
+                    if success:
+                        logging.info(f"Authentication successful: {message}")
+                        self.authenticated = True
+                    else:
+                        logging.error(f"Authentication failed: {message}")
+                        self._stop_event.set()
+                case MessageType.SUCCESS:
+                    logging.info("Server success: " + msg.payload.decode('utf-8', errors='replace'))
+                case MessageType.ERROR:
+                    logging.error("Server error: " + msg.payload.decode('utf-8', errors='replace'))
+                case _:
+                    logging.warning(f"Unhandled binary message type {msg.header.message_type}")
         except Exception as e:
             logging.error(f"Failed to process binary message: {e}")
 
-    async def _on_text_message(self, text: str):
-        """Handle JSON text messages from the server."""
+    def _on_text_message(self, text: str):
         try:
             import json
             data = json.loads(text)
             msg_type = data.get("type")
-            if msg_type == "world_chunk":
-                cx = data.get("chunkX", 0)
-                cz = data.get("chunkZ", 0)
-                chunk_data = data.get("data", {})
-                vertices = numpy.array(chunk_data.get("vertices", []), dtype=numpy.float32).reshape(-1, 6)
-                indices = numpy.array(chunk_data.get("indices", []), dtype=numpy.uint32)
-                trees = chunk_data.get("trees", [])
-                self._response_queue.put((cx, cz, vertices, indices, trees))
-                logging.debug(f"Received JSON chunk ({cx},{cz}) with {len(vertices)} vertices")
-            elif msg_type == "error":
-                logging.error(f"Server error: {data.get('message', 'Unknown error')}")
-            elif msg_type == "success":
-                logging.info(f"Server success: {data.get('message', '')}")
-            else:
-                logging.debug(f"Unhandled JSON message type: {msg_type}")
+            match msg_type:
+                case "world_chunk":
+                    cx = data.get("chunkX", 0)
+                    cz = data.get("chunkZ", 0)
+                    chunk_data = data.get("data", {})
+                    vertices = numpy.array(chunk_data.get("vertices", []), dtype=numpy.float32).reshape(-1, 6)
+                    indices = numpy.array(chunk_data.get("indices", []), dtype=numpy.uint32)
+                    trees = chunk_data.get("trees", [])
+                    self._response_queue.put((cx, cz, vertices, indices, trees))
+                    logging.debug(f"Received JSON chunk ({cx},{cz}) with {len(vertices)} vertices")
+                case "authentication_response":
+                    success = data.get("success", False)
+                    message = data.get("message", "")
+                    if success:
+                        logging.info(f"Authentication successful: {message}")
+                        self.authenticated = True
+                    else:
+                        logging.error(f"Authentication failed: {message}")
+                        self._stop_event.set()
+                case "error":
+                    logging.error(f"Server error: {data.get('message', 'Unknown error')}")
+                case "success":
+                    logging.info(f"Server success: {data.get('message', '')}")
+                case _:
+                    logging.debug(f"Unhandled JSON message type: {msg_type}")
         except Exception as e:
             logging.error(f"Failed to parse JSON message: {e}")
 

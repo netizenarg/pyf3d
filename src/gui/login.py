@@ -1,5 +1,5 @@
+# login.py
 import ctypes
-
 import glfw
 import numpy
 from OpenGL.GL import *
@@ -7,7 +7,7 @@ from OpenGL.GL import *
 from logger import logging
 from shaders.shader import Shader
 from shaders.gui_shdr import RECT_VERTEX_SHADER, RECT_FRAGMENT_SHADER, TEXT_VERTEX_SHADER, TEXT_FRAGMENT_SHADER
-from gui.font import FONT_BITMAPS
+from gui.font import create_font_atlas
 from gui.widget import Widget
 from gui.textbox import TextBox
 
@@ -71,17 +71,21 @@ class LoginDrawer:
             glEnableVertexAttribArray(1)
             glBindVertexArray(0)
             self.quad_index_count = 6
-            self.font_tex = self._create_font_texture()
-        except Exception as e:
-            logging.error(f"Shader compilation failed, using fallback: {e}")
+            self.font_atlas = create_font_atlas(16)
+            self.font_tex = self.font_atlas.tex_id
+            self.text_uSmoothing = self.text_shader.getUniformLocation("uSmoothing")
+        except Exception as err:
+            logging.error(f"Shader compilation failed, using fallback: {err}")
             self.use_shaders = False
-            self.font_tex = self._create_font_texture()
+            self.font_atlas = None
+            self.font_tex = self._create_fallback_texture()
 
-    def _create_font_texture(self):
+    def _create_fallback_texture(self):
         cols, rows = 16, 8
         cell_w, cell_h = 8, 8
         tex_w, tex_h = cols*cell_w, rows*cell_h
         data = numpy.zeros((tex_h, tex_w, 4), dtype=numpy.uint8)
+        from gui.fontdata import FONT_BITMAPS
         for code in range(32,128):
             row = (code-32)//cols
             col = (code-32)%cols
@@ -122,30 +126,35 @@ class LoginDrawer:
     def _draw_text(self, text, x, y, size, color=(1,1,1,1), uppercase=False):
         if self.use_shaders:
             self.text_shader.use()
+            glUniform1f(self.text_uSmoothing, 0.1 / (size / self.font_atlas.pixel_height))
             glUniform2f(self.text_shader.getUniformLocation("uScreenSize"), self.width, self.height)
             glUniform3f(self.text_shader.getUniformLocation("uColor"), color[0], color[1], color[2])
             glActiveTexture(GL_TEXTURE0)
             glBindTexture(GL_TEXTURE_2D, self.font_tex)
             glUniform1i(self.text_shader.getUniformLocation("uFontTexture"), 0)
             glBindVertexArray(self.quad_vao)
-            for i,ch in enumerate(text):
+            scale = size / self.font_atlas.pixel_height
+            for i, ch in enumerate(text):
                 code = ord(ch)
-                if uppercase and 97<=code<=122: code-=32
-                if code<32 or code>127: continue
-                idx = code-32
-                row, col = idx//16, idx%16
-                u0, v0 = col/16, row/8
-                u1, v1 = (col+1)/16, (row+1)/8
-                glUniform4f(self.text_shader.getUniformLocation("uTexRect"), u0, v0, u1-u0, v1-v0)
-                pos_x = x + i*size
-                y_center = self.height - (y + size/2)
-                glUniform2f(self.text_shader.getUniformLocation("uOffset"), pos_x + size/2, y_center)
-                glUniform2f(self.text_shader.getUniformLocation("uScale"), size, size)
+                if uppercase and 97 <= code <= 122:
+                    code -= 32
+                ch_upper = chr(code)
+                glyph = self.font_atlas.get_glyph(ch_upper)
+                if glyph is None:
+                    continue
+                gw, gh, advance, u0, v0, u1, v1 = glyph
+                tex_rect = (u0, v0, u1 - u0, v1 - v0)
+                glUniform4f(self.text_shader.getUniformLocation("uTexRect"), *tex_rect)
+                pos_x = x + i * advance * scale
+                quad_w = gw * scale
+                quad_h = gh * scale
+                y_bottom = self.height - (y + quad_h)
+                glUniform2f(self.text_shader.getUniformLocation("uOffset"), pos_x + quad_w/2, y_bottom + quad_h/2)
+                glUniform2f(self.text_shader.getUniformLocation("uScale"), quad_w, quad_h)
                 glDrawElements(GL_TRIANGLES, self.quad_index_count, GL_UNSIGNED_INT, None)
             glBindVertexArray(0)
         else:
             logging.warning("Text rendering not available in fallback mode")
-
 
 class LoginDialog(Widget):
     def __init__(self, screen_width, screen_height, default_login="", default_password="", callback=None):
@@ -165,7 +174,6 @@ class LoginDialog(Widget):
     def _init_widgets(self):
         self.login_input = TextBox("Login", "login", 0, 0, 0, 0, label_width=80)
         self.password_input = TextBox("Password", "password", 0, 0, 0, 0, label_width=80)
-        # Pre‑fill with default values
         self.login_input.text = self.default_login
         self.password_input.text = self.default_password
 
@@ -176,7 +184,6 @@ class LoginDialog(Widget):
         self.rect = (self.x, self.y, self.width, self.height)
         self.login_input.rect = (self.x + 20, self.y + 60, self.width - 40, 30)
         self.password_input.rect = (self.x + 20, self.y + 110, self.width - 40, 30)
-        # Set focus to login field by default
         self.login_input.active = True
         self.password_input.active = False
 
@@ -190,7 +197,7 @@ class LoginDialog(Widget):
             return self.login_input.handle_key(key, char)
         if self.password_input.active:
             return self.password_input.handle_key(key, char)
-        if key == 257 or key == 335:  # Enter
+        if key == 257 or key == 335:
             self._submit()
             return True
         return False

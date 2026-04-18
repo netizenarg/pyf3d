@@ -4,8 +4,9 @@ import ctypes
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 
+from shaders.shader import Shader
 from shaders.gui_shdr import *
-from gui.font import FONT_BITMAPS
+from gui.font import create_font_atlas
 
 
 class StatsPanel:
@@ -22,14 +23,8 @@ class StatsPanel:
         self.cols = 4
 
         # Shaders
-        self.rect_shader = compileProgram(
-            compileShader(RECT_VERTEX_SHADER, GL_VERTEX_SHADER),
-            compileShader(RECT_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
-        )
-        self.text_shader = compileProgram(
-            compileShader(TEXT_VERTEX_SHADER, GL_VERTEX_SHADER),
-            compileShader(TEXT_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
-        )
+        self.rect_shader = Shader(RECT_VERTEX_SHADER, RECT_FRAGMENT_SHADER)
+        self.text_shader = Shader(TEXT_VERTEX_SHADER, TEXT_FRAGMENT_SHADER)
 
         # Quad VAO
         quad_verts = numpy.array([
@@ -56,20 +51,23 @@ class StatsPanel:
         self.quad_index_count = 6
 
         # Font texture
-        self.font_tex = self._create_font_texture()
+        self.font_atlas = create_font_atlas(32, 2.0)
+        self.font_tex = self.font_atlas.tex_id
 
         # Cache uniform locations
-        self.rect_uScreenSize = glGetUniformLocation(self.rect_shader, "uScreenSize")
-        self.rect_uColor = glGetUniformLocation(self.rect_shader, "uColor")
-        self.rect_uOffset = glGetUniformLocation(self.rect_shader, "uOffset")
-        self.rect_uScale = glGetUniformLocation(self.rect_shader, "uScale")
+        self.rect_uScreenSize = self.rect_shader.getUniformLocation("uScreenSize")
+        self.rect_uColor = self.rect_shader.getUniformLocation("uColor")
+        self.rect_uOffset = self.rect_shader.getUniformLocation("uOffset")
+        self.rect_uScale = self.rect_shader.getUniformLocation("uScale")
 
-        self.text_uScreenSize = glGetUniformLocation(self.text_shader, "uScreenSize")
-        self.text_uColor = glGetUniformLocation(self.text_shader, "uColor")
-        self.text_uOffset = glGetUniformLocation(self.text_shader, "uOffset")
-        self.text_uScale = glGetUniformLocation(self.text_shader, "uScale")
-        self.text_uTexRect = glGetUniformLocation(self.text_shader, "uTexRect")
-        self.text_uFontTexture = glGetUniformLocation(self.text_shader, "uFontTexture")
+        self.text_uScreenSize = self.text_shader.getUniformLocation("uScreenSize")
+        self.text_uColor = self.text_shader.getUniformLocation("uColor")
+        self.text_uOffset = self.text_shader.getUniformLocation("uOffset")
+        self.text_uScale = self.text_shader.getUniformLocation("uScale")
+        self.text_uTexRect = self.text_shader.getUniformLocation("uTexRect")
+        self.text_uFontTexture = self.text_shader.getUniformLocation("uFontTexture")
+        self.text_uTexRect = self.text_shader.getUniformLocation("uTexRect")
+        self.text_uSmoothing = self.text_shader.getUniformLocation("uSmoothing")
 
         # Data
         self.position = (0, 0, 0)
@@ -153,63 +151,54 @@ class StatsPanel:
     def draw(self):
         if not self.enabled:
             return
-
         glDisable(GL_DEPTH_TEST)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-
-        # Compute column widths based on maximum text width per column
         col_widths = [0] * self.cols
+        scale = (self.row_height - 2 * self.cell_padding) / self.font_atlas.pixel_height
         for row in range(self.rows):
             for col in range(self.cols):
                 text = self.cells[row][col]
-                if text is None: continue
+                if not text:
+                    continue
                 text = str(text)
-                if not text: continue
-                width = len(text) * self.char_size
+                width = 0
+                for ch in text:
+                    glyph = self.font_atlas.get_glyph(ch)
+                    if glyph:
+                        width += glyph[2] * scale
+                width = max(width, 20)
                 if width > col_widths[col]:
                     col_widths[col] = width
-
-        # Add cell padding to column widths
         for col in range(self.cols):
             col_widths[col] += 2 * self.cell_padding
-
-        # Total panel width = sum(col_widths) + 2*margin
         panel_w = sum(col_widths) + 2 * self.panel_margin
         panel_h = self.rows * self.row_height + 2 * self.panel_margin
         panel_y = self.height - panel_h - self.panel_margin
         panel_x = (self.width - panel_w) // 2   # center horizontally
-
-        # Draw background panel
-        glUseProgram(self.rect_shader)
+        self.rect_shader.use()
         glUniform2f(self.rect_uScreenSize, self.width, self.height)
         glUniform4f(self.rect_uColor, 0.0, 0.0, 0.0, 0.6)
         self._draw_rect(panel_x, panel_y, panel_w, panel_h)
-
-        # Draw table
-        glUseProgram(self.text_shader)
+        self.text_shader.use()
+        font_size = self.row_height - 2 * self.cell_padding
+        glUniform1f(self.text_uSmoothing, 0.1 / (font_size / self.font_atlas.pixel_height))
         glUniform2f(self.text_uScreenSize, self.width, self.height)
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, self.font_tex)
         glUniform1i(self.text_uFontTexture, 0)
         glUniform3f(self.text_uColor, 1.0, 1.0, 1.0)
-
-        # Starting x for columns
         start_x = panel_x + self.panel_margin
         y = panel_y + self.panel_margin + self.cell_padding
-
         for row in range(self.rows):
             x = start_x
             for col in range(self.cols):
                 text = self.cells[row][col]
-                if text is None: text = ''
-                text = str(text)
                 if text:
-                    y_center = y + self.row_height // 2 - self.char_size // 2
-                    self._draw_text(text, x + self.cell_padding, y_center, self.char_size)
+                    y_center = y + (self.row_height - font_size) // 2
+                    self._draw_text(str(text), x + self.cell_padding, y_center, font_size)
                 x += col_widths[col]
             y += self.row_height
-
         glDisable(GL_BLEND)
         glEnable(GL_DEPTH_TEST)
 
@@ -223,26 +212,23 @@ class StatsPanel:
 
     def _draw_text(self, text, x, y, size, uppercase=False):
         glBindVertexArray(self.quad_vao)
+        scale = size / self.font_atlas.pixel_height
         for i, ch in enumerate(text):
             code = ord(ch)
-            if uppercase and 97 <= code <= 122:   # a-z -> A-Z
+            if uppercase and 97 <= code <= 122:
                 code -= 32
-            if code < 32 or code > 127:
+            ch_upper = chr(code)
+            glyph = self.font_atlas.get_glyph(ch_upper)
+            if glyph is None:
                 continue
-            idx = code - 32
-            cols = 16
-            rows = 8
-            row = idx // cols
-            col = idx % cols
-            u0 = col / cols
-            v0 = row / rows
-            u1 = (col + 1) / cols
-            v1 = (row + 1) / rows
+            gw, gh, advance, u0, v0, u1, v1 = glyph
             tex_rect = (u0, v0, u1 - u0, v1 - v0)
             glUniform4f(self.text_uTexRect, *tex_rect)
-            pos_x = x + i * size
-            y_center = self.height - (y + size/2)
-            glUniform2f(self.text_uOffset, pos_x + size/2, y_center)
-            glUniform2f(self.text_uScale, size, size)
+            pos_x = x + i * advance * scale
+            quad_w = gw * scale
+            quad_h = gh * scale
+            y_bottom = self.height - (y + quad_h)
+            glUniform2f(self.text_uOffset, pos_x + quad_w/2, y_bottom + quad_h/2)
+            glUniform2f(self.text_uScale, quad_w, quad_h)
             glDrawElements(GL_TRIANGLES, self.quad_index_count, GL_UNSIGNED_INT, None)
         glBindVertexArray(0)

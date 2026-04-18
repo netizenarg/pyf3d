@@ -316,7 +316,7 @@ class ProtocolWebsocket:
         self.binary = binary_protocol
         self.client.on_binary = self._on_binary
         self.client.on_close = self._on_close
-        self._binary_handler: Optional[Callable[[bytes], None]] = None
+        self._binary_handler: Optional[Callable[[bytes], Any]] = None
 
     async def connect(self):
         await self.client.connect()
@@ -324,16 +324,16 @@ class ProtocolWebsocket:
     async def close(self):
         await self.client.close()
 
-    def set_binary_handler(self, handler: Callable[[bytes], None]):
+    def set_binary_handler(self, handler: Callable[[bytes], Any]):
         self._binary_handler = handler
 
     def _on_binary(self, data: bytes):
         if self._binary_handler:
-            self._binary_handler(data)
+            asyncio.create_task(self._binary_handler(data))
 
     def _on_close(self, code: int, reason: str):
         if self._binary_handler:
-            self._binary_handler(b'')
+            asyncio.create_task(self._binary_handler(b''))
 
     async def send_binary_message(self, msg: bytes):
         await self.client.send_binary(msg)

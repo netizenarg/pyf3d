@@ -317,7 +317,7 @@ class ChunkManager:
 
         for key in needed:
             if key not in self.chunks and key not in self.pending_requests:
-                if self.network_mode and self.network_client:
+                if self.network_mode and self.network_client and self.network_client.is_connected():
                     self.pending_requests.add(key)
                     self.pending_request_time[key] = time.time()
                     self.network_client.request_chunk(*key)

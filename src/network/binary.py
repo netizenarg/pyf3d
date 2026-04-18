@@ -11,6 +11,21 @@ HEADER_FORMAT = '!BB H I I I I'
 HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 
 
+def is_valid_binary_message(data: bytes) -> bool:
+    if len(data) < HEADER_SIZE:
+        return False
+    version = data[0]
+    if version > CURRENT_PROTOCOL_VERSION:
+        return False
+    msg_type = struct.unpack_from('!H', data, 2)[0]
+    if msg_type > 1000:
+        return False
+    length = struct.unpack_from('!I', data, 16)[0]
+    if length > MAX_MESSAGE_SIZE:
+        return False
+    return True
+
+
 class MessageType(IntEnum):
     INVALID = 0
     HEARTBEAT = 1
@@ -31,6 +46,9 @@ class MessageType(IntEnum):
     PLAYER_ROTATION = 302
     PLAYER_STATE = 303
     PLAYER_POSITION_CORRECTION = 304
+    PLAYER_UPDATE = 305
+    PLAYER_SPAWN = 306
+    PLAYER_DESPAWN = 307
     NPC_SPAWN = 400
     NPC_UPDATE = 401
     NPC_DESPAWN = 402

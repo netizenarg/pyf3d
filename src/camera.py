@@ -4,6 +4,16 @@ import math
 import numpy
 import random
 
+def project_point(world_pos, view, proj, width, height):
+    import numpy
+    p = proj @ view @ numpy.append(world_pos, 1.0)
+    if p[3] == 0:
+        return -1, -1
+    p /= p[3]
+    x = (p[0] * 0.5 + 0.5) * width
+    y = (1.0 - (p[1] * 0.5 + 0.5)) * height
+    return int(x), int(y)
+
 def get_height(x, z):
     return (math.sin(x * 0.1) * math.cos(z * 0.1) +
             0.3 * math.sin(x * 0.3 + 1.2) +

@@ -10,23 +10,25 @@ from gui.font import create_font_atlas
 
 
 class StatsPanel:
-    def __init__(self, screen_width, screen_height, enabled=True):
+    def __init__(self, screen_width, screen_height, player=None, enabled=True):
+        self.player = player
         self.enabled = enabled
         self.width = screen_width
         self.height = screen_height
         self.panel_margin = 10
-        self.char_size = 8                      # reduced font size
+        self.char_size = 8
         self.padding = 10
-        self.cell_padding = 8                   # padding inside each cell
+        self.cell_padding = 8
         self.row_height = self.char_size + self.cell_padding * 2
         self.rows = 3
         self.cols = 4
 
-        # Shaders
+        # Table content – rows x columns
+        self.cells = [[""] * self.cols for _ in range(self.rows)]
+
         self.rect_shader = Shader(RECT_VERTEX_SHADER, RECT_FRAGMENT_SHADER)
         self.text_shader = Shader(TEXT_VERTEX_SHADER, TEXT_FRAGMENT_SHADER)
 
-        # Quad VAO
         quad_verts = numpy.array([
             -0.5, -0.5,  0.0, 0.0,
              0.5, -0.5,  1.0, 0.0,
@@ -50,11 +52,9 @@ class StatsPanel:
         glBindVertexArray(0)
         self.quad_index_count = 6
 
-        # Font texture
         self.font_atlas = create_font_atlas(32, 2.0)
         self.font_tex = self.font_atlas.tex_id
 
-        # Cache uniform locations
         self.rect_uScreenSize = self.rect_shader.getUniformLocation("uScreenSize")
         self.rect_uColor = self.rect_shader.getUniformLocation("uColor")
         self.rect_uOffset = self.rect_shader.getUniformLocation("uOffset")
@@ -68,22 +68,6 @@ class StatsPanel:
         self.text_uFontTexture = self.text_shader.getUniformLocation("uFontTexture")
         self.text_uTexRect = self.text_shader.getUniformLocation("uTexRect")
         self.text_uSmoothing = self.text_shader.getUniformLocation("uSmoothing")
-
-        # Data
-        self.position = (0, 0, 0)
-        self.speed = 0.0
-        self.level = 0
-        self.life = 100
-        self.mana = 100
-        self.left_weapon = ""
-        self.left_ammo = 0
-        self.right_weapon = ""
-        self.right_ammo = 0
-        self.killed_mobs = 0
-        self.familiar_name = ""
-
-        # Table content – 3 rows x 4 columns
-        self.cells = [[""] * self.cols for _ in range(self.rows)]
 
     def _create_font_texture(self):
         cols = 16
@@ -116,36 +100,23 @@ class StatsPanel:
         self.width = width
         self.height = height
 
-    def update(self, position, speed=10.0, level=0, life=100, mana=100,
-               left_weapon='', left_ammo=0, right_weapon='', right_ammo=0,
-               killed_mobs=0, familiar_name='', auto_play=False):
-        self.position = position
-        self.speed = speed
-        self.life = life
-        self.mana = mana
-        self.left_weapon = left_weapon
-        self.left_ammo = left_ammo
-        self.right_weapon = right_weapon
-        self.right_ammo = right_ammo
-        self.familiar_name = familiar_name
-        self.level = level
-        self.killed_mobs = killed_mobs
+    def update(self, auto_play=False):
         self.auto_play = auto_play
 
         # Build table content (3 rows x 4 columns)
-        self.cells[0][0] = f"Level: {level}"
-        self.cells[0][1] = f"Pos: ({position[0]:.1f}, {position[1]:.1f}, {position[2]:.1f})"
-        self.cells[0][2] = f"Speed: {speed:.1f}"
-        self.cells[0][3] = f"Life: {life}%"
+        self.cells[0][0] = f"Level: {self.player.level}"
+        self.cells[0][1] = f"Pos: ({self.player.position[0]:.1f}, {self.player.position[1]:.1f}, {self.player.position[2]:.1f})"
+        self.cells[0][2] = f"Speed: {self.player.speed:.1f}"
+        self.cells[0][3] = f"Life: {self.player.life}%"
 
-        self.cells[1][0] = f"Mana: {mana}%"
-        self.cells[1][1] = f"L: {left_weapon} ({left_ammo if left_ammo >= 0 else '∞'})"
-        self.cells[1][2] = f"R: {right_weapon} ({right_ammo if right_ammo >= 0 else '∞'})"
-        self.cells[1][3] = f"Kills: {killed_mobs}"
+        self.cells[1][0] = f"Mana: {self.player.mana}%"
+        self.cells[1][1] = f"L: {self.player.lweapon.name} ({self.player.ammo_left if self.player.ammo_left >= 0 else '∞'})"
+        self.cells[1][2] = f"R: {self.player.rweapon.name} ({self.player.ammo_right if self.player.ammo_right >= 0 else '∞'})"
+        self.cells[1][3] = f"Kills: {self.player.killed_mobs}"
 
-        self.cells[2][0] = familiar_name
-        self.cells[2][1] = f"Auto: {'ON' if auto_play else 'OFF'}"
-        self.cells[2][2] = ""
+        self.cells[2][0] = f'{self.player.name} ({self.player.get_id()})'
+        self.cells[2][1] = self.player.familiar_name
+        self.cells[2][2] = f"Auto: {'ON' if auto_play else 'OFF'}"
         self.cells[2][3] = ""
 
     def draw(self):

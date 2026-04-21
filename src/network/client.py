@@ -147,9 +147,9 @@ class NetworkClient:
         else: # JSON request
             logging.debug(f"Sending JSON chunk request: {cx},{cz}")
             await self.ws_proto.send_json({
-                "type": "world_chunk_request",
-                "chunkX": cx,
-                "chunkZ": cz,
+                "type": "get_chunk",
+                "x": cx,
+                "z": cz,
                 "lod": 0
             })
         logging.debug(f"Requested chunk ({cx},{cz})")
@@ -255,8 +255,8 @@ class NetworkClient:
             msg_type = data.get("type")
             match msg_type:
                 case "world_chunk":
-                    cx = data.get("chunkX", 0)
-                    cz = data.get("chunkZ", 0)
+                    cx = data.get("x", 0)
+                    cz = data.get("z", 0)
                     chunk_data = data.get("data", {})
                     vertices = numpy.array(chunk_data.get("vertices", []), dtype=numpy.float32).reshape(-1, 6)
                     indices = numpy.array(chunk_data.get("indices", []), dtype=numpy.uint32)

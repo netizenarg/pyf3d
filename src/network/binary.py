@@ -33,34 +33,43 @@ class MessageType(IntEnum):
     AUTHENTICATION = 3
     ERROR = 4
     SUCCESS = 5
+
     CHUNK_DATA = 100
     CHUNK_REQUEST = 101
     TERRAIN_HEIGHT = 102
     BIOME_DATA = 103
-    ENTITY_SPAWN = 200
-    ENTITY_UPDATE = 201
-    ENTITY_DESPAWN = 202
-    ENTITY_BATCH_UPDATE = 203
-    PLAYER_POSITION = 300
-    PLAYER_VELOCITY = 301
-    PLAYER_ROTATION = 302
-    PLAYER_STATE = 303
-    PLAYER_POSITION_CORRECTION = 304
-    PLAYER_UPDATE = 305
-    PLAYER_SPAWN = 306
-    PLAYER_DESPAWN = 307
+
+    PLAYER_POSITION = 200
+    PLAYER_VELOCITY = 201
+    PLAYER_ROTATION = 202
+    PLAYER_STATE = 203
+    PLAYER_POSITION_CORRECTION = 204
+    PLAYER_UPDATE = 205
+    PLAYER_SPAWN   = 206
+    PLAYER_DESPAWN = 207
+    PLAYERS_UPDATE = 250
+
+    ENTITY_SPAWN = 300
+    ENTITY_UPDATE = 301
+    ENTITY_DESPAWN = 302
+    ENTITY_BATCH_UPDATE = 303
+
     NPC_SPAWN = 400
     NPC_UPDATE = 401
     NPC_DESPAWN = 402
     NPC_INTERACTION = 403
+
     COMBAT_EVENT = 500
     DAMAGE_EVENT = 501
     HEALTH_UPDATE = 502
+
     INVENTORY_UPDATE = 600
     LOOT_SPAWN = 601
     LOOT_PICKUP = 602
+
     CHAT_MESSAGE = 700
     SYSTEM_MESSAGE = 701
+
     CUSTOM_EVENT = 1000
 
 
@@ -87,8 +96,8 @@ class NetworkHeader:
 
     def pack(self) -> bytes:
         return struct.pack(HEADER_FORMAT,
-                           self.version, self.flags, self.message_type,
-                           self.sequence, self.timestamp, self.length, self.checksum)
+            self.version, self.flags, self.message_type,
+            self.sequence, self.timestamp, self.length, self.checksum)
 
     @classmethod
     def unpack(cls, data: bytes) -> 'NetworkHeader':

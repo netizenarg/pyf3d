@@ -13,6 +13,7 @@ from network.binary import (
 )
 from network.websocket import ProtocolWebsocket
 from player import Player
+from remote_player import RemotePlayer
 
 
 class NetworkClient:
@@ -60,7 +61,7 @@ class NetworkClient:
             await self.ws_proto.send_binary_message(msg.serialize())
         else:
             await self.ws_proto.send_json({
-                "type": "authentication",
+                "msg": "authentication",
                 "login": self.player.name,
                 "password": self.password
             })
@@ -94,7 +95,7 @@ class NetworkClient:
             await self.ws_proto.send_binary_message(msg.serialize())
         else: # For WebSocket JSON protocol, just send a welcome message
             await self.ws_proto.send_json({
-                "type": "protocol_negotiation",
+                "msg": "protocol_negotiation",
                 "protocol": "websocket",
                 "version": 1
             })
@@ -147,7 +148,7 @@ class NetworkClient:
         else: # JSON request
             logging.debug(f"Sending JSON chunk request: {cx},{cz}")
             await self.ws_proto.send_json({
-                "type": "get_chunk",
+                "msg": "get_chunk",
                 "x": cx,
                 "z": cz,
                 "lod": 0
@@ -188,28 +189,22 @@ class NetworkClient:
                         })
                     self._response_queue.put((cx, cz, vertices, indices, trees))
                     logging.debug(f"Received chunk ({cx},{cz}) with {len(vertices)} vertices")
-                case MessageType.PLAYER_UPDATE:
+                case MessageType.PLAYERS_UPDATE:
                     reader = BinaryReader(msg.payload)
-                    count = reader.read_uint32()
-                    current_ids = set()
-                    for _ in range(count):
-                        plid = reader.read_uint32()
-                        x = reader.read_float(); y = reader.read_float(); z = reader.read_float()
-                        yaw = reader.read_float()
-                        health = reader.read_float(); max_health = reader.read_float()
-                        name = reader.read_string()
-                        current_ids.add(plid)
-                        if plid == self.player.get_id():
-                            continue
-                        with self.remote_players_lock:
-                            if plid in self.remote_players:
-                                self.remote_players[plid].update(pos, yaw, health, max_health)
-                            else:
-                                self.remote_players[plid] = RemotePlayer(plid, name, pos, yaw, health, max_health)
+                    plid = reader.read_uint64()
+                    if plid == self.player.get_id():
+                        return
+                    x, y, z = reader.read_vector3()
+                    yaw = reader.read_float()
+                    health = reader.read_float()
+                    max_health = reader.read_float()
+                    name = reader.read_string()
+                    timestamp = reader.read_uint64()
                     with self.remote_players_lock:
-                        for plid in list(self.remote_players.keys()):
-                            if plid not in current_ids:
-                                del self.remote_players[plid]
+                        if plid in self.remote_players:
+                            self.remote_players[plid].update((x, y, z), yaw, health, max_health)
+                        else:
+                            self.remote_players[plid] = RemotePlayer(plid, name, (x, y, z), yaw, health, max_health)
                 case MessageType.PLAYER_SPAWN:
                     reader = BinaryReader(msg.payload)
                     plid = reader.read_uint64()
@@ -252,17 +247,31 @@ class NetworkClient:
     def _on_text_message(self, text: str):
         try:
             data = json.loads(text)
-            msg_type = data.get("type")
+            msg_type = data.get("msg")
             match msg_type:
-                case "world_chunk":
+                case "get_chunk":
                     cx = data.get("x", 0)
                     cz = data.get("z", 0)
                     chunk_data = data.get("data", {})
-                    vertices = numpy.array(chunk_data.get("vertices", []), dtype=numpy.float32).reshape(-1, 6)
+                    logging.debug(f"Chunk ({cx},{cz}) data keys: {list(chunk_data.keys())}")
+                    vertices_raw = chunk_data.get("vertices", [])
+                    if len(vertices_raw) == 0:
+                        logging.warning(f"Chunk ({cx},{cz}) has NO vertices!")
+                        return
+                    if len(vertices_raw) % 6 != 0:
+                        logging.error(f"Chunk ({cx},{cz}) vertices length {len(vertices_raw)} not divisible by 6!")
+                        if isinstance(vertices_raw[0], list):
+                            vertices = numpy.array(vertices_raw, dtype=numpy.float32)
+                        else:
+                            vertices = numpy.array(vertices_raw, dtype=numpy.float32).reshape(-1, 6)
+                    else:
+                        vertices = numpy.array(vertices_raw, dtype=numpy.float32).reshape(-1, 6)
                     indices = numpy.array(chunk_data.get("indices", []), dtype=numpy.uint32)
+                    stones = chunk_data.get("stones", [])
                     trees = chunk_data.get("trees", [])
-                    self._response_queue.put((cx, cz, vertices, indices, trees))
-                    logging.debug(f"Received JSON chunk ({cx},{cz}) with {len(vertices)} vertices")
+                    portal = chunk_data.get("portal")
+                    logging.debug(f"Chunk ({cx},{cz}): {len(vertices)} verts, {len(indices)} indices, format: {vertices.shape}")
+                    self._response_queue.put((cx, cz, vertices, indices, stones, trees, portal))
                 case "player_spawn":
                     plid = data["player_id"]
                     name = data["name"]

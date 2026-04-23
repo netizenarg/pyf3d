@@ -169,6 +169,7 @@ class ChunkGenerator:
 
 class Chunk:
     def __init__(self, cx=0, cz=0, vertices=[], indices=[], stones=None, trees=None, portal=None):
+        logging.debug(f"Creating chunk ({cx},{cz}) with {len(vertices)} vertices, {len(indices)} indices")
         self.cx = cx
         self.cz = cz
         self.vertices = vertices
@@ -196,24 +197,26 @@ class Chunk:
         self._upload(vertices, indices)
 
     def _upload(self, vertices, indices):
-        self.vao = glGenVertexArrays(1)
-        self.vbo = glGenBuffers(1)
-        self.ebo = glGenBuffers(1)
-
-        glBindVertexArray(self.vao)
-
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.ebo)
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices, GL_STATIC_DRAW)
-
-        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
-        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
-
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 24, ctypes.c_void_p(0))
-        glEnableVertexAttribArray(0)
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 24, ctypes.c_void_p(12))
-        glEnableVertexAttribArray(1)
-
-        glBindVertexArray(0)
+        if len(vertices) == 0 or len(indices) == 0:
+            logging.error(f"Chunk ({self.cx},{self.cz}) has empty vertices or indices - skipping upload")
+            return
+        try:
+            self.vao = glGenVertexArrays(1)
+            self.vbo = glGenBuffers(1)
+            self.ebo = glGenBuffers(1)
+            glBindVertexArray(self.vao)
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.ebo)
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices, GL_STATIC_DRAW)
+            glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
+            glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 24, ctypes.c_void_p(0))
+            glEnableVertexAttribArray(0)
+            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 24, ctypes.c_void_p(12))
+            glEnableVertexAttribArray(1)
+            glBindVertexArray(0)
+            logging.debug(f"Chunk ({self.cx},{self.cz}) uploaded successfully to GPU")
+        except Exception as err:
+            logging.error(f"Failed to upload chunk ({self.cx},{self.cz}): {err}")
 
     def draw(self, shader):
         if self.vao is None:
@@ -300,21 +303,17 @@ class ChunkManager:
         phys_size = (self.chunk_size - 1) * self.spacing
         cx = int(camera_pos[0] // phys_size)
         cz = int(camera_pos[2] // phys_size)
-
         needed = set()
         for dx in range(-self.load_radius, self.load_radius + 1):
             for dz in range(-self.load_radius, self.load_radius + 1):
                 needed.add((cx + dx, cz + dz))
-
         for key in list(self.chunks.keys()):
             if key not in needed:
                 self.chunks.pop(key).delete()
-
         self.pending_requests = {req for req in self.pending_requests if req in needed}
         for key in list(self.pending_request_time.keys()):
             if key not in self.pending_requests:
                 self.pending_request_time.pop(key, None)
-
         for key in needed:
             if key not in self.chunks and key not in self.pending_requests:
                 if self.network_mode and self.network_client and self.network_client.is_connected():
@@ -332,32 +331,38 @@ class ChunkManager:
                     self.generator.request_chunk(*key)
                 else:
                     self.chunks[key] = self._generate_sync(*key)
-
         if self.network_client:
             for data in self.network_client.get_completed():
                 if data is None:
                     continue
-                cx, cz, vertices, indices, trees = data
-                key = (cx, cz)
-                if key in self.pending_requests:
-                    self.pending_requests.discard(key)
-                    self.pending_request_time.pop(key, None)
-                    if vertices is not None:
-                        chunk = Chunk(cx, cz, vertices, indices, stones=[], trees=trees, portal=None)
-                        self.chunks[key] = chunk
-                        if self.serializer:
-                            self.serializer.save_chunk(None, cx, cz, vertices, indices, [], trees)
-                        logging.debug(f"Received chunk {key} from network")
-                    else:
-                        logging.warning(f"Network returned empty data for chunk {key}, falling back to local generation")
-                        if self.generator:
-                            self.generator.request_chunk(*key)
-                        else:
-                            self.chunks[key] = self._generate_sync(*key)
+                if len(data) == 5:
+                    cx, cz, vertices, indices, trees = data
+                    stones = []
+                    portal = None
+                elif len(data) == 6:
+                    cx, cz, vertices, indices, stones, trees = data
+                    portal = None
+                elif len(data) == 7:
+                    cx, cz, vertices, indices, stones, trees, portal = data
                 else:
-                    self.pending_requests.discard(key)
-                    self.pending_request_time.pop(key, None)
-
+                    logging.error(f"Unexpected data length from network: {len(data)}")
+                    continue
+                key = (cx, cz)
+                if vertices is not None and len(vertices) > 0:
+                    chunk = Chunk(cx, cz, vertices, indices, stones, trees, portal)
+                    if key in needed:
+                        self.chunks[key] = chunk
+                        logging.debug(f"Added chunk {key} to active chunks")
+                    else:
+                        logging.warning(f"Chunk {key} arrived but no longer needed, discarding")
+                    if self.serializer:
+                        portal_name = portal.get('name') if portal else None
+                        self.serializer.save_chunk(portal_name, cx, cz, vertices, indices, stones, trees)
+                    logging.debug(f"Received chunk {key} from network with {len(vertices)} vertices")
+                else:
+                    logging.warning(f"Network returned empty data for chunk {key}")
+                self.pending_requests.discard(key)
+                self.pending_request_time.pop(key, None)
         now = time.time()
         for key in list(self.pending_requests):
             if key in self.pending_request_time and now - self.pending_request_time[key] > self.request_timeout:
@@ -368,18 +373,14 @@ class ChunkManager:
                     self.generator.request_chunk(*key)
                 else:
                     self.chunks[key] = self._generate_sync(*key)
-
         if self.generator:
             for data in self.generator.get_completed():
                 cx, cz, vertices, indices, stones, trees, portal = data
                 key = (cx, cz)
-                if key in self.pending_requests and key in needed:
-                    self.pending_requests.discard(key)
-                    self.pending_request_time.pop(key, None)
+                if key in needed:
                     self.chunks[key] = Chunk(cx, cz, vertices, indices, stones, trees, portal)
-                else:
-                    self.pending_requests.discard(key)
-                    self.pending_request_time.pop(key, None)
+                self.pending_requests.discard(key)
+                self.pending_request_time.pop(key, None)
 
     def draw(self, shader):
         for chunk in self.chunks.values():

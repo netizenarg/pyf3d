@@ -41,6 +41,8 @@ class NetworkClient:
         self._request_queue = queue.Queue()
         self._queue_chunks = queue.Queue()
         self._stop_event = threading.Event()
+        self.chunk_size = None
+        self.chunk_spacing = None
         self._thread = threading.Thread(target=self._run_async_loop, daemon=True)
         self._thread.start()
 
@@ -53,8 +55,11 @@ class NetworkClient:
     async def _authenticate(self):
         if self.protocol == "binary":
             writer = BinaryWriter()
-            writer.write_string(self.player.name)#login
+            writer.write_string(self.player.name)
             writer.write_string(self.password)
+            writer.write_float(self.player.position[0])
+            writer.write_float(self.player.position[1])
+            writer.write_float(self.player.position[2])
             msg = self.binary_proto.create_message(
                 MessageType.AUTHENTICATION,
                 writer.get_buffer(),
@@ -65,7 +70,10 @@ class NetworkClient:
             await self.ws_proto.send_json({
                 "msg": "authentication",
                 "login": self.player.name,
-                "password": self.password
+                "password": self.password,
+                "x": self.player.position[0],
+                "y": self.player.position[1],
+                "z": self.player.position[2]
             })
         logging.info("Authentication request sent")
 
@@ -141,21 +149,27 @@ class NetworkClient:
             writer = BinaryWriter()
             writer.write_int32(cx)
             writer.write_int32(cz)
+            writer.write_float(round(self.player.position[0], 3))
+            writer.write_float(round(self.player.position[1], 3))
+            writer.write_float(round(self.player.position[2], 3))
             msg = self.binary_proto.create_message(
                 MessageType.CHUNK_REQUEST,
                 writer.get_buffer(),
                 flags=ProtocolFlags.RELIABLE
             )
             await self.ws_proto.send_binary_message(msg.serialize())
-        else: # JSON request
-            logging.debug(f"Sending JSON chunk request: {cx},{cz}")
+        else:
+            logging.debug(f"Sending JSON chunk request: {cx},{cz} with player position")
             await self.ws_proto.send_json({
                 "msg": "get_chunk",
                 "x": cx,
                 "z": cz,
-                "lod": 0
+                "lod": 0,
+                "player_x": round(self.player.position[0], 3),
+                "player_y": round(self.player.position[1], 3),
+                "player_z": round(self.player.position[2], 3)
             })
-        logging.debug(f"Requested chunk ({cx},{cz})")
+        logging.debug(f"Requested chunk ({cx},{cz}) player at {self.player.position}")
 
     async def _on_binary_message(self, data: bytes):
         if not data:
@@ -179,19 +193,13 @@ class NetworkClient:
                     reader = BinaryReader(msg.payload)
                     cx = reader.read_int32()
                     cz = reader.read_int32()
-                    size = reader.read_int32()
+                    self.chunk_size = reader.read_int32()
+                    self.chunk_spacing = reader.read_float()
                     vertices = numpy.frombuffer(reader.read_bytes(reader.read_uint32()), dtype=numpy.float32).reshape(-1, 6)
                     indices = numpy.frombuffer(reader.read_bytes(reader.read_uint32()), dtype=numpy.uint32)
-                    tree_count = reader.read_uint32()
-                    trees = []
-                    for _ in range(tree_count):
-                        trees.append({
-                            'x': reader.read_float(),
-                            'z': reader.read_float(),
-                            'type': reader.read_uint8()
-                        })
-                    self._queue_chunks.put((cx, cz, vertices, indices, trees))
-                    logging.debug(f"Received chunk ({cx},{cz}) with {len(vertices)} vertices")
+                    timestamp = reader.read_uint64()
+                    self._queue_chunks.put((cx, cz, vertices, indices, [], [], None))
+                    logging.debug(f"Received chunk ({cx},{cz},{self.chunk_size},{self.chunk_spacing}) with {len(vertices)} vertices")
                 case MessageType.PLAYERS_UPDATE:
                     reader = BinaryReader(msg.payload)
                     plid = reader.read_uint64()
@@ -255,65 +263,17 @@ class NetworkClient:
                 case "get_chunk":
                     cx = data.get("x", 0)
                     cz = data.get("z", 0)
-                    logging.debug(f"Chunk ({cx},{cz}) data keys: {list(data.keys())}")
-                    size = data.get("size", 32) # chunk size
+                    self.chunk_size = data.get("size", 32)
+                    self.chunk_spacing = data.get("spacing", 1.0)
                     vertices_raw = data.get("vertices", [])
                     indices_raw = data.get("indices", [])
                     if len(vertices_raw) == 0 or len(indices_raw) == 0:
                         logging.warning(f"Chunk ({cx},{cz}) has NO vertices or indices!")
                         return
-                    if len(vertices_raw) % 6 != 0:
-                        logging.error(f"Chunk ({cx},{cz}) vertices length {len(vertices_raw)} not divisible by 6!")
-                        if isinstance(vertices_raw[0], list):
-                            vertices = numpy.array(vertices_raw, dtype=numpy.float32)
-                        else:
-                            vertices = numpy.array(vertices_raw, dtype=numpy.float32).reshape(-1, 1)
-                    else:
-                        vertices = numpy.array(vertices_raw, dtype=numpy.float32).reshape(-1, 6)
+                    vertices = numpy.array(vertices_raw, dtype=numpy.float32).reshape(-1, 6)
                     indices = numpy.array(indices_raw, dtype=numpy.uint32)
-                    spacing = 1.0
-                    phys_width = (size - 1) * spacing
-                    phys_height = (size - 1) * spacing
-                    world_origin_x = cx * phys_width
-                    world_origin_z = cz * phys_height
-                    stones = []
-                    trees = []
-                    rng = random.Random((cx * 1000003) ^ (cz * 1000033))
-                    num_items = rng.randint(5, 10)
-                    for _ in range(num_items):
-                        x = float(world_origin_x + rng.uniform(1.5, phys_width - 1.5))
-                        z = float(world_origin_z + rng.uniform(1.5, phys_height - 1.5))
-                        y_val = float(vertices[0, 1]) if len(vertices) > 0 else 0.0
-                        trunk_height = float(rng.uniform(1.8, 2.2))
-                        foliage_radius = float(rng.uniform(1.0, 1.4))
-                        rotation_y = float(rng.uniform(0, 2 * math.pi))
-                        stones.append({
-                            'x': x, 'y': y_val, 'z': z,
-                            'trunk_height': trunk_height,
-                            'foliage_radius': foliage_radius,
-                            'rotation_y': rotation_y
-                        })
-                        trees.append({
-                            'x': x+.5, 'y': y_val, 'z': z+.5,
-                            'trunk_height': trunk_height,
-                            'foliage_radius': foliage_radius,
-                            'rotation_y': rotation_y
-                        })
-                    PORTAL_PROBABILITY = 0.1
-                    portal = None
-                    if rng.random() < PORTAL_PROBABILITY:
-                        margin = 2.0
-                        x = float(world_origin_x + rng.uniform(margin, phys_width - margin))
-                        z = float(world_origin_z + rng.uniform(margin, phys_height - margin))
-                        y_val = float(vertices[0, 1]) if len(vertices) > 0 else 0.0
-                        portal = {
-                            'name': f"{int(round(x))}_{int(round(y_val))}_{int(round(z))}",
-                            'x': x, 'z': z,
-                            'rotation_y': float(rng.uniform(0, 2 * math.pi)),
-                            'scale': float(rng.uniform(0.9, 1.1))
-                        }
-                    logging.debug(f"Chunk ({cx},{cz}): {len(vertices)} verts, {len(indices)} indices, format: {vertices.shape}")
-                    self._queue_chunks.put((cx, cz, vertices, indices, stones, trees, portal))
+                    self._queue_chunks.put((cx, cz, vertices, indices, [], [], None))
+                    logging.debug(f"Received chunk ({cx},{cz},{self.chunk_size},{self.chunk_spacing}) with {len(vertices)} vertices")
                 case "player_spawn":
                     plid = data["player_id"]
                     name = data["name"]

@@ -150,7 +150,7 @@ class ChunkGenerator:
     def request_chunk(self, cx, cz):
         self.request_queue.put((cx, cz))
 
-    def get_completed(self):
+    def get_chunks(self):
         completed = []
         while True:
             try:
@@ -299,7 +299,7 @@ class ChunkManager:
             self.serializer.save_chunk(portal_name, cx, cz,
                 chunk.vertices, chunk.indices, chunk.stones, chunk.trees)
 
-    def update(self, camera_pos):
+    def update_old(self, camera_pos):
         phys_size = (self.chunk_size - 1) * self.spacing
         cx = int(camera_pos[0] // phys_size)
         cz = int(camera_pos[2] // phys_size)
@@ -332,7 +332,7 @@ class ChunkManager:
                 else:
                     self.chunks[key] = self._generate_sync(*key)
         if self.network_client:
-            for data in self.network_client.get_completed():
+            for data in self.network_client.get_chunks():
                 if data is None:
                     continue
                 if len(data) == 5:
@@ -374,7 +374,7 @@ class ChunkManager:
                 else:
                     self.chunks[key] = self._generate_sync(*key)
         if self.generator:
-            for data in self.generator.get_completed():
+            for data in self.generator.get_chunks():
                 cx, cz, vertices, indices, stones, trees, portal = data
                 key = (cx, cz)
                 if key in needed:
@@ -392,3 +392,125 @@ class ChunkManager:
         for chunk in self.chunks.values():
             chunk.delete()
         self.chunks.clear()
+
+    def update(self, camera_pos):
+        if self.network_mode and self.network_client:
+            phys_size = 15.0
+        else:
+            phys_size = (self.chunk_size - 1) * self.spacing
+        cx = int(camera_pos[0] // phys_size)
+        cz = int(camera_pos[2] // phys_size)
+        needed = set()
+        for dx in range(-self.load_radius, self.load_radius + 1):
+            for dz in range(-self.load_radius, self.load_radius + 1):
+                needed.add((cx + dx, cz + dz))
+        for key in list(self.chunks.keys()):
+            if key not in needed:
+                self.chunks.pop(key).delete()
+        self.pending_requests = {req for req in self.pending_requests if req in needed}
+        for key in list(self.pending_request_time.keys()):
+            if key not in self.pending_requests:
+                self.pending_request_time.pop(key, None)
+        for key in needed:
+            if key not in self.chunks and key not in self.pending_requests:
+                if self.network_mode and self.network_client and self.network_client.is_connected():
+                    self.pending_requests.add(key)
+                    self.pending_request_time[key] = time.time()
+                    self.network_client.request_chunk(*key)
+                elif self.first_running and self.serializer:
+                    self.first_running = not self.first_running
+                    portal_name, vertices, indices, stones, trees = self.serializer.load_chunk(*key)
+                    if vertices is not None:
+                        self.chunks[key] = Chunk(*key, vertices, indices, stones, trees, portal_name)
+                        continue
+                elif self.generator:
+                    self.pending_requests.add(key)
+                    self.generator.request_chunk(*key)
+                else:
+                    self.chunks[key] = self._generate_sync(*key)
+        if self.network_client:
+            for data in self.network_client.get_chunks():
+                if data is None:
+                    continue
+                if len(data) == 5:
+                    cx, cz, vertices, indices, trees = data
+                    stones = []
+                    portal = None
+                elif len(data) == 6:
+                    cx, cz, vertices, indices, stones, trees = data
+                    portal = None
+                elif len(data) == 7:
+                    cx, cz, vertices, indices, stones, trees, portal = data
+                else:
+                    logging.error(f"Unexpected data length from network: {len(data)}")
+                    continue
+                key = (cx, cz)
+                if vertices is not None and len(vertices) > 0:
+                    if isinstance(vertices, numpy.ndarray):
+                        vertices = vertices.astype(numpy.float32)
+                    else:
+                        vertices = numpy.array(vertices, dtype=numpy.float32)
+                    if isinstance(indices, numpy.ndarray):
+                        indices = indices.astype(numpy.uint32)
+                    else:
+                        indices = numpy.array(indices, dtype=numpy.uint32)
+                    chunk = Chunk(cx, cz, vertices, indices, stones, trees, portal)
+                    if key in needed:
+                        self.chunks[key] = chunk
+                        logging.debug(f"Added chunk {key} to active chunks")
+                    else:
+                        logging.warning(f"Chunk {key} arrived but no longer needed, discarding")
+                    if self.serializer:
+                        portal_name = portal.get('name') if portal else None
+                        save_stones = []
+                        for stone in stones:
+                            if isinstance(stone, dict):
+                                save_stone = {}
+                                for k, v in stone.items():
+                                    if isinstance(v, (numpy.floating, numpy.integer)):
+                                        save_stone[k] = v.item()
+                                    elif isinstance(v, numpy.ndarray):
+                                        save_stone[k] = v.tolist()
+                                    else:
+                                        save_stone[k] = v
+                                save_stones.append(save_stone)
+                            else:
+                                save_stones.append(stone)
+                        save_trees = []
+                        for tree in trees:
+                            if isinstance(tree, dict):
+                                save_tree = {}
+                                for k, v in tree.items():
+                                    if isinstance(v, (numpy.floating, numpy.integer)):
+                                        save_tree[k] = v.item()
+                                    elif isinstance(v, numpy.ndarray):
+                                        save_tree[k] = v.tolist()
+                                    else:
+                                        save_tree[k] = v
+                                save_trees.append(save_tree)
+                            else:
+                                save_trees.append(tree)
+                        self.serializer.save_chunk(portal_name, cx, cz, vertices, indices, save_stones, save_trees)
+                    logging.debug(f"Received chunk {key} from network with {len(vertices)} vertices")
+                else:
+                    logging.warning(f"Network returned empty data for chunk {key}")
+                self.pending_requests.discard(key)
+                self.pending_request_time.pop(key, None)
+        now = time.time()
+        for key in list(self.pending_requests):
+            if key in self.pending_request_time and now - self.pending_request_time[key] > self.request_timeout:
+                logging.warning(f"Chunk {key} request timed out after {self.request_timeout}s, falling back to local generation")
+                self.pending_requests.discard(key)
+                self.pending_request_time.pop(key, None)
+                if self.generator:
+                    self.generator.request_chunk(*key)
+                else:
+                    self.chunks[key] = self._generate_sync(*key)
+        if self.generator:
+            for data in self.generator.get_chunks():
+                cx, cz, vertices, indices, stones, trees, portal = data
+                key = (cx, cz)
+                if key in needed:
+                    self.chunks[key] = Chunk(cx, cz, vertices, indices, stones, trees, portal)
+                self.pending_requests.discard(key)
+                self.pending_request_time.pop(key, None)

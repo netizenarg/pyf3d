@@ -1,7 +1,9 @@
 import asyncio
 import json
 import logging
+import math
 import queue
+import random
 import threading
 from typing import List, Tuple, Optional
 
@@ -37,7 +39,7 @@ class NetworkClient:
         self.remote_players_lock = threading.Lock()
         self.binary_proto = ProtocolBinary()
         self._request_queue = queue.Queue()
-        self._response_queue = queue.Queue()
+        self._queue_chunks = queue.Queue()
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run_async_loop, daemon=True)
         self._thread.start()
@@ -172,14 +174,15 @@ class NetworkClient:
                     pong = self.binary_proto.create_message(MessageType.HEARTBEAT, b'')
                     await self.ws_proto.send_binary_message(pong.serialize())
                 case MessageType.CHUNK_DATA:
+                    # TODO: also need fix for valid chunk generation
+                    # see local generate_chunk_data(cx, cz, chunk_size, spacing)
                     reader = BinaryReader(msg.payload)
                     cx = reader.read_int32()
                     cz = reader.read_int32()
-                    vertices_data = reader.read_bytes(reader.read_uint32())
-                    indices_data = reader.read_bytes(reader.read_uint32())
+                    size = reader.read_int32()
+                    vertices = numpy.frombuffer(reader.read_bytes(reader.read_uint32()), dtype=numpy.float32).reshape(-1, 6)
+                    indices = numpy.frombuffer(reader.read_bytes(reader.read_uint32()), dtype=numpy.uint32)
                     tree_count = reader.read_uint32()
-                    vertices = numpy.frombuffer(vertices_data, dtype=numpy.float32).reshape(-1, 6)
-                    indices = numpy.frombuffer(indices_data, dtype=numpy.uint32)
                     trees = []
                     for _ in range(tree_count):
                         trees.append({
@@ -187,7 +190,7 @@ class NetworkClient:
                             'z': reader.read_float(),
                             'type': reader.read_uint8()
                         })
-                    self._response_queue.put((cx, cz, vertices, indices, trees))
+                    self._queue_chunks.put((cx, cz, vertices, indices, trees))
                     logging.debug(f"Received chunk ({cx},{cz}) with {len(vertices)} vertices")
                 case MessageType.PLAYERS_UPDATE:
                     reader = BinaryReader(msg.payload)
@@ -252,26 +255,65 @@ class NetworkClient:
                 case "get_chunk":
                     cx = data.get("x", 0)
                     cz = data.get("z", 0)
-                    chunk_data = data.get("data", {})
-                    logging.debug(f"Chunk ({cx},{cz}) data keys: {list(chunk_data.keys())}")
-                    vertices_raw = chunk_data.get("vertices", [])
-                    if len(vertices_raw) == 0:
-                        logging.warning(f"Chunk ({cx},{cz}) has NO vertices!")
+                    logging.debug(f"Chunk ({cx},{cz}) data keys: {list(data.keys())}")
+                    size = data.get("size", 32) # chunk size
+                    vertices_raw = data.get("vertices", [])
+                    indices_raw = data.get("indices", [])
+                    if len(vertices_raw) == 0 or len(indices_raw) == 0:
+                        logging.warning(f"Chunk ({cx},{cz}) has NO vertices or indices!")
                         return
                     if len(vertices_raw) % 6 != 0:
                         logging.error(f"Chunk ({cx},{cz}) vertices length {len(vertices_raw)} not divisible by 6!")
                         if isinstance(vertices_raw[0], list):
                             vertices = numpy.array(vertices_raw, dtype=numpy.float32)
                         else:
-                            vertices = numpy.array(vertices_raw, dtype=numpy.float32).reshape(-1, 6)
+                            vertices = numpy.array(vertices_raw, dtype=numpy.float32).reshape(-1, 1)
                     else:
                         vertices = numpy.array(vertices_raw, dtype=numpy.float32).reshape(-1, 6)
-                    indices = numpy.array(chunk_data.get("indices", []), dtype=numpy.uint32)
-                    stones = chunk_data.get("stones", [])
-                    trees = chunk_data.get("trees", [])
-                    portal = chunk_data.get("portal")
+                    indices = numpy.array(indices_raw, dtype=numpy.uint32)
+                    spacing = 1.0
+                    phys_width = (size - 1) * spacing
+                    phys_height = (size - 1) * spacing
+                    world_origin_x = cx * phys_width
+                    world_origin_z = cz * phys_height
+                    stones = []
+                    trees = []
+                    rng = random.Random((cx * 1000003) ^ (cz * 1000033))
+                    num_items = rng.randint(5, 10)
+                    for _ in range(num_items):
+                        x = float(world_origin_x + rng.uniform(1.5, phys_width - 1.5))
+                        z = float(world_origin_z + rng.uniform(1.5, phys_height - 1.5))
+                        y_val = float(vertices[0, 1]) if len(vertices) > 0 else 0.0
+                        trunk_height = float(rng.uniform(1.8, 2.2))
+                        foliage_radius = float(rng.uniform(1.0, 1.4))
+                        rotation_y = float(rng.uniform(0, 2 * math.pi))
+                        stones.append({
+                            'x': x, 'y': y_val, 'z': z,
+                            'trunk_height': trunk_height,
+                            'foliage_radius': foliage_radius,
+                            'rotation_y': rotation_y
+                        })
+                        trees.append({
+                            'x': x+.5, 'y': y_val, 'z': z+.5,
+                            'trunk_height': trunk_height,
+                            'foliage_radius': foliage_radius,
+                            'rotation_y': rotation_y
+                        })
+                    PORTAL_PROBABILITY = 0.1
+                    portal = None
+                    if rng.random() < PORTAL_PROBABILITY:
+                        margin = 2.0
+                        x = float(world_origin_x + rng.uniform(margin, phys_width - margin))
+                        z = float(world_origin_z + rng.uniform(margin, phys_height - margin))
+                        y_val = float(vertices[0, 1]) if len(vertices) > 0 else 0.0
+                        portal = {
+                            'name': f"{int(round(x))}_{int(round(y_val))}_{int(round(z))}",
+                            'x': x, 'z': z,
+                            'rotation_y': float(rng.uniform(0, 2 * math.pi)),
+                            'scale': float(rng.uniform(0.9, 1.1))
+                        }
                     logging.debug(f"Chunk ({cx},{cz}): {len(vertices)} verts, {len(indices)} indices, format: {vertices.shape}")
-                    self._response_queue.put((cx, cz, vertices, indices, stones, trees, portal))
+                    self._queue_chunks.put((cx, cz, vertices, indices, stones, trees, portal))
                 case "player_spawn":
                     plid = data["player_id"]
                     name = data["name"]
@@ -311,35 +353,35 @@ class NetworkClient:
                         for plid in list(self.remote_players.keys()):
                             if plid not in current_ids:
                                 del self.remote_players[plid]
-                case "authentication_response":
-                    success = data.get("success", False)
-                    message = data.get("message", "")
-                    if success:
-                        logging.info(f"Authentication successful: {message}")
+                case "authentication":
+                    player_id = data.get("player_id", 0)
+                    description = data.get("desc", "")
+                    if player_id:
+                        logging.info(f"Authentication successful: {description}")
                         self.authenticated = True
-                        self.player.set_id(data.get("player_id"))
+                        self.player.set_id(player_id)
                     else:
-                        logging.error(f"Authentication failed: {message}")
+                        logging.error(f"Authentication failed: {description}")
                         self._stop_event.set()
                 case "error":
-                    logging.error(f"Server error: {data.get('message', 'Unknown error')}")
+                    logging.error(f"Server error: {data.get('desc', 'Unknown error')}")
                 case "success":
-                    logging.info(f"Server success: {data.get('message', '')}")
+                    logging.info(f"Server success: {data.get('desc', '')}")
                 case "server_status": # Silently ignore – just a periodic update from the master
                     pass
                 case _:
                     logging.debug(f"Unhandled JSON message type: {msg_type}")
-        except Exception as e:
-            logging.error(f"Failed to parse JSON message: {e}")
+        except Exception as err:
+            logging.error(f"Failed to parse JSON message: {err}")
 
     def request_chunk(self, cx: int, cz: int):
         self._request_queue.put((cx, cz))
 
-    def get_completed(self) -> List[Tuple[int, int, numpy.ndarray, numpy.ndarray, list]]:
+    def get_chunks(self) -> List[Tuple[int, int, numpy.ndarray, numpy.ndarray, list]]:
         completed = []
         while True:
             try:
-                completed.append(self._response_queue.get_nowait())
+                completed.append(self._queue_chunks.get_nowait())
             except queue.Empty:
                 break
         return completed

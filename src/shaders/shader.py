@@ -24,6 +24,9 @@ class Shader:
     def use(self):
         glUseProgram(self.program)
 
+    def getUniformLocation(self, val):
+        return glGetUniformLocation(self.program, val)
+
     def set_mat4(self, name, mat):
         loc = glGetUniformLocation(self.program, name)
         glUniformMatrix4fv(loc, 1, GL_TRUE, mat)

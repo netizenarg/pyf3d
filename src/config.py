@@ -59,7 +59,11 @@ class Config:
     defaults = {
         "db_path": "data.db",
         "network_mode": False,
-        "server_url": "http://localhost:8080",
+        "server_host": "localhost",
+        "server_port": 8080,
+        "protocol": "websocket",
+        "login": "player1",
+        "password": "",
         "mouse_sensitivity": 1.0,
         "movement_speed": 10.0,
         "jump_force": 8.0,

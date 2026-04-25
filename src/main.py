@@ -14,21 +14,26 @@ screen = Screen()
 
 from logger import logging, setup_logging
 
-import glfw
-from OpenGL.GL import *
-import numpy
+import ctypes
 import math
 import random
 import sys
-import ctypes
+import time
+
+import numpy
+import glfw
+from OpenGL.GL import *
 
 from shaders.shader import Shader
 from shaders.terrain_shdr import VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC
 
 from bbox import BoundingBox
-from camera import get_height
+from camera import get_height, project_point
 from config import Config
 from media.audio import Audio
+from network.client import NetworkClient
+from gui.login import show_login_dialog
+from gui.msgbox import MessageBox
 from gui.settings import DialogSettings
 from gui.portals import DialogPortals
 from gui.stats import StatsPanel
@@ -42,13 +47,16 @@ from portal import PortalManager
 from house import HouseManager
 from target import Target
 from sky import Sky
-from player import Player
-from player_model import PlayerModel
-from player_ai import PlayerAI
 from health import HealthManager
 from mobs import get_aimed_mob, MobManager
 from weapon import BaseAmmo, Ammo, Weapon
 from loot import LootManager
+from player import Player
+from player_model import PlayerModel
+from player_ai import PlayerAI
+from remote_player import RemotePlayer
+from health_bar import HealthBarRenderer
+from text_renderer import TextRenderer
 
 
 def compute_projection(width, height):
@@ -82,15 +90,21 @@ def generate_window_icon():
     return (icon_size, icon_size, pixels)
 
 
-
 def main():
+
+    if not glfw.init():
+        sys.exit("Failed to initialize GLFW")
+
     config = Config.load()
 
     setup_logging(config.get('log_config', {}))
 
     db_path = config.get("db_path", "data.db")
     network_mode = config.get("network_mode", False)
-    server_url = config.get("server_url", "http://localhost:8080")
+    server_host = config.get("server_host", "localhost")
+    server_port = config.get("server_port", 9999)
+    login = config.get("login", "player1")
+    password = config.get("password", "")
     mouse_sensitivity = config.get("mouse_sensitivity", 1.0)
     movement_speed = config.get("movement_speed", 10.0)
     jump_force = config.get("jump_force", 8.0)
@@ -121,7 +135,62 @@ def main():
 
     audio = Audio()
 
-    player = Player(db_path, height=player_height, speed=movement_speed, jump_force=jump_force, gravity=gravity)
+    glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
+    glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
+    glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+
+    window = glfw.create_window(screen.width, screen.height, "3D Shooter - Infinite Terrain", None, None)
+    if not window:
+        glfw.terminate()
+        sys.exit("Failed to create window")
+    if glfw.get_platform() != glfw.PLATFORM_WAYLAND:
+        glfw.set_window_icon(window, 1, [generate_window_icon()])
+
+    glfw.make_context_current(window)
+    glViewport(0, 0, screen.width, screen.height)
+    glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
+    glEnable(GL_DEPTH_TEST)
+
+    player = Player(db_path, name=login, height=player_height, speed=movement_speed, jump_force=jump_force, gravity=gravity)
+
+    remote_players = {}  # player_id -> RemotePlayer
+    health_bar_renderer = HealthBarRenderer()
+    text_renderer = TextRenderer(screen.width, screen.height)
+    network_client = None
+    server_url = "localhost:9999"
+    login_cancelled = False
+
+    if network_mode:
+        result = show_login_dialog(window, screen.width, screen.height, login, password)
+        if result is None:
+            login_cancelled = True
+            network_mode = False
+            logging.info("Login cancelled, switching to local mode")
+        else:
+            player.name, password = result
+            config["login"] = player.name
+            config["password"] = password
+            Config.save(config)
+            protocol = config.get("protocol", "binary")
+            match protocol:
+                case 'binary':
+                    server_url = f'{server_host}:{server_port}'
+                case 'websocket':
+                    server_url = f'ws://{server_host}:{server_port}'
+            logging.info(f'Connect will to: {server_url}')
+            logging.info(f'Protocol type: {protocol}')
+            logging.info(f'Player login: {player.name}')
+            #logging.debug(f'Player password: {password}')
+            try:
+                network_client = NetworkClient(server_url, protocol, player, password)
+            except Exception as err:
+                logging.error(f"Failed to create network client: {err}")
+                network_mode = False
+                network_client = None
+            else:
+                logging.info(f"NetworkClient running...")
+        if not login_cancelled:
+            glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
 
     if spawn_mode == "random":
         rand_x = random.uniform(-random_range, random_range)
@@ -138,25 +207,6 @@ def main():
                 rand_y = get_height(rand_x, rand_z) + player.height
                 player.position = (rand_x, rand_y, rand_z)
 
-    if not glfw.init():
-        sys.exit("Failed to initialize GLFW")
-
-    glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
-    glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
-    glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
-
-    window = glfw.create_window(screen.width, screen.height, "FPS Shooter - Infinite Terrain", None, None)
-    if not window:
-        glfw.terminate()
-        sys.exit("Failed to create window")
-    if glfw.get_platform() != glfw.PLATFORM_WAYLAND:
-        glfw.set_window_icon(window, 1, [generate_window_icon()])
-
-    glfw.make_context_current(window)
-    glViewport(0, 0, screen.width, screen.height)
-    glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
-    glEnable(GL_DEPTH_TEST)
-
     bounding_box = BoundingBox()
 
     chunk_manager = ChunkManager(
@@ -165,7 +215,7 @@ def main():
         spacing=terrain_spacing,
         player=player,
         network_mode=network_mode,
-        server_url=server_url
+        network_client=network_client
     )
 
     sky = Sky(chunk_manager,
@@ -257,7 +307,7 @@ def main():
     player_ai.set_ammo_list(ammo_list)
 
     compass = Compass(screen.width, screen.height, camera, draw_compass, compass_scale)
-    stats_panel = StatsPanel(screen.width, screen.height, draw_stats)
+    stats_panel = StatsPanel(screen.width, screen.height, player, draw_stats)
     fps_overlay = FPSOverlay(screen.width, screen.height, config.get("show_fps", False))
     dialog_settings = DialogSettings(window, screen.width, screen.height, config, camera,
                                      player, stats_panel, fps_overlay, compass, player_ai)
@@ -272,17 +322,27 @@ def main():
         compass.resize(width, height)
         dialog_settings.resize(width, height)
         proj = compute_projection(width, height)
+        text_renderer.resize(width, height)
 
     glfw.set_window_size_callback(window, resize_callback)
 
     keys = {}
 
-    # Mouse scroll callback
+    def char_callback(window, codepoint):
+        char = chr(codepoint)
+        if dialog_settings.active:
+            if dialog_settings.handle_key(0, char):
+                return
+    glfw.set_char_callback(window, char_callback)
+
     def scroll_callback(window, xoffset, yoffset):
         dialog_portals.handle_scroll(xoffset, yoffset)
     glfw.set_scroll_callback(window, scroll_callback)
 
     def key_callback(window, key, scancode, action, mods):
+        if dialog_settings.active:
+            if dialog_settings.handle_key(key, ''):
+                return
         if action == glfw.RELEASE:
             keys[key] = False
             if key == glfw.KEY_ESCAPE:
@@ -421,6 +481,19 @@ def main():
         view, forward = camera.update(keys, dt, speed_mult, player_ai.enabled)
 
         chunk_manager.update(camera.position)
+
+        if network_client:
+            remote_players = network_client.get_remote_players_snapshot()
+            # player_updates = network_client.get_player_updates()
+            # for update in player_updates:
+            #     for (plid, pos, yaw, health, max_health, name) in update:
+            #         if plid == player.get_id():
+            #             continue
+            #         if plid in remote_players:
+            #             remote_players[plid].update(pos, yaw, health, max_health)
+            #         else:
+            #             remote_players[plid] = RemotePlayer(plid, name, pos, yaw, health, max_health)
+
         stone_manager.update()
         tree_manager.update()
         portal_manager.update(dt)
@@ -458,21 +531,7 @@ def main():
             player_ai.update(dt, current_time)
 
         if stats_panel.enabled:
-            stats_panel.update(
-                position=player.position,
-                speed=player.speed,
-                level=player.level,
-                life=player.life,
-                mana=player.mana,
-                left_weapon=player.lweapon.name,
-                left_ammo=player.ammo_left,
-                right_weapon=player.rweapon.name,
-                right_ammo=player.ammo_right,
-                killed_mobs=player.killed_mobs,
-                familiar_name=player.familiar_name,
-                auto_play=player_ai.enabled
-
-            )
+            stats_panel.update(auto_play=player_ai.enabled)
 
         # ----- Rendering -----
         glClearColor(0.1, 0.2, 0.3, 1.0)
@@ -506,6 +565,12 @@ def main():
         mob_manager.draw(view, proj, light_dir, light_intensity, screen.width, screen.height)
         loot_manager.draw(view, proj)
 
+        for rp in remote_players.values():
+            cx = int(rp.position[0] // chunk_manager.phys_width)
+            cz = int(rp.position[2] // chunk_manager.phys_height)
+            if (cx, cz) in chunk_manager.chunks:
+                rp.draw(view, proj, light_dir, light_intensity)
+
         for target in targets:
             target.draw(shader_3d, view, proj, light_dir)
 
@@ -523,21 +588,16 @@ def main():
             # When AI is enabled, player.yaw is already set by the AI (pointing at target)
             player.draw(view, proj, light_dir, light_intensity)
 
-        # Portal collision and teleport (only when not in dialog)
-        # Portal collision and teleport (only when not in dialog)
         if not dialog_portals.active:
             portal = portal_manager.get_portal_at(player.position, radius=0.8)
             if portal:
-                # Save current portal to DB
                 player.serializer.save_portal(portal.name, portal.base_x, portal.center_y, portal.base_z)
 
-                # Get ALL portals from database
                 all_portals = player.serializer.load_all_portals()
                 other_portals = [p for p in all_portals if p['name'] != portal.name]
 
                 if other_portals:
                     target_dict = random.choice(other_portals)
-                    # Place player at the target portal (with optional slight offset to avoid immediate re-trigger)
                     target_x = target_dict['x'] + 3.0
                     target_y = target_dict['y'] + player.height
                     target_z = target_dict['z'] + 3.0
@@ -546,24 +606,30 @@ def main():
                     camera.position = numpy.array([target_x, target_y, target_z])
                     camera.adjust_height()
 
-                    # Save target portal as visited (optional)
                     player.serializer.save_portal(target_dict['name'], target_dict['x'], target_dict['y'], target_dict['z'])
 
         for ammo in ammo_list:
             ammo.draw(view, proj)
 
+        glDepthMask(GL_FALSE)
+        for rp in remote_players.values():
+            health_percent = rp.health / rp.max_health
+            if health_percent > 0:
+                health_bar_renderer.draw(rp.position, health_percent, view, proj, camera.position)
+            head_pos = rp.position + numpy.array([0.0, 1.5, 0.0])
+            screen_x, screen_y = project_point(head_pos, view, proj, screen.width, screen.height)
+            if 0 <= screen_x <= screen.width and 0 <= screen_y <= screen.height:
+                text_renderer.draw_text_2d(rp.name, screen_x - 30, screen_y - 20, 12, color=(1,1,0,1))
+        glDepthMask(GL_TRUE)
+
         sky.draw_foreground(view, proj, camera.position, glfw.get_time())
 
         if bounding_box.enabled:
             if camera.mode == 1:
-                #player_center = (player.position[0], player.position[1] + 0.8, player.position[2])
-                #bounding_box.draw(player_center, (0.8, 1.6, 0.8), view, proj, (0,1,0))
                 player_center = (player.position[0], player.position[1] + 0.6, player.position[2])
                 bounding_box.draw(player_center, (1.2, 1.2, 1.2), view, proj, (0,1,0))
             for mobs in mob_manager.active_mobs.values():
                 for mob in mobs:
-                    #mob_center = (mob.position[0], mob.position[1] + 0.4, mob.position[2])
-                    #bounding_box.draw(mob_center, (0.8, 0.8, 0.8), view, proj, (1,0,0))
                     mob_center = (mob.position[0], mob.position[1] + 0.6, mob.position[2])
                     bounding_box.draw(mob_center, (1.2, 1.2, 1.2), view, proj, (1,0,0))
             for item in health_manager.active_items.values():
@@ -591,7 +657,7 @@ def main():
             for houses_list in house_manager.houses.values():
                 for house in houses_list:
                     center = (house.base_x, get_height(house.base_x, house.base_z) + 0.8, house.base_z)
-                    size = 1.5 * house.scale   # approximate
+                    size = 1.5 * house.scale
                     bounding_box.draw(center, (size, size * 1.5, size), view, proj, (0.5, 0.2, 0.8))
 
         # Crosshair
@@ -611,6 +677,10 @@ def main():
 
         glfw.swap_buffers(window)
         glfw.poll_events()
+
+    if network_client:
+        network_client.stop()
+        time.sleep(1.0)  # Give the async thread time to send close frame
 
     chunk_manager.save_all_chunks()
     stone_manager.shutdown()

@@ -55,7 +55,7 @@ class Bag:
 
 
 class Player:
-    def __init__(self, db_path, model=None, height=0.5, position=(0.0, 0.0, 0.0),
+    def __init__(self, db_path, model=None, player_id=-1, name='local-player', height=0.5, position=(0.0, 0.0, 0.0),
                  portal_position=(0.0, 0.0, 0.0), yaw=0.0, speed=0.0,
                  vertical_velocity=0.0, grounded=True,
                  jump_force=8.0, gravity=20.0,
@@ -63,6 +63,8 @@ class Player:
         self.model = model
         self.serializer = Serializer(db_path)
         self.bag = Bag()
+        self.plid = player_id
+        self.name = name
         self.height = height
         self.position = position
         self.portal_position = portal_position
@@ -94,6 +96,12 @@ class Player:
     @property
     def rweapon(self):
         return self.bag.weapons.get(self.weapon_right, self.bag.default_weapon)
+
+    def get_id(self) -> int:
+        return self.plid
+
+    def set_id(self, value: int = -1):
+        self.plid = value
 
     def save(self):
         data = {

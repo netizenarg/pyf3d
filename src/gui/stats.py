@@ -4,34 +4,31 @@ import ctypes
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
 
+from shaders.shader import Shader
 from shaders.gui_shdr import *
-from gui.font import FONT_BITMAPS
+from gui.font import create_font_atlas
 
 
 class StatsPanel:
-    def __init__(self, screen_width, screen_height, enabled=True):
+    def __init__(self, screen_width, screen_height, player=None, enabled=True):
+        self.player = player
         self.enabled = enabled
         self.width = screen_width
         self.height = screen_height
         self.panel_margin = 10
-        self.char_size = 8                      # reduced font size
+        self.char_size = 8
         self.padding = 10
-        self.cell_padding = 8                   # padding inside each cell
+        self.cell_padding = 8
         self.row_height = self.char_size + self.cell_padding * 2
         self.rows = 3
         self.cols = 4
 
-        # Shaders
-        self.rect_shader = compileProgram(
-            compileShader(RECT_VERTEX_SHADER, GL_VERTEX_SHADER),
-            compileShader(RECT_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
-        )
-        self.text_shader = compileProgram(
-            compileShader(TEXT_VERTEX_SHADER, GL_VERTEX_SHADER),
-            compileShader(TEXT_FRAGMENT_SHADER, GL_FRAGMENT_SHADER)
-        )
+        # Table content – rows x columns
+        self.cells = [[""] * self.cols for _ in range(self.rows)]
 
-        # Quad VAO
+        self.rect_shader = Shader(RECT_VERTEX_SHADER, RECT_FRAGMENT_SHADER)
+        self.text_shader = Shader(TEXT_VERTEX_SHADER, TEXT_FRAGMENT_SHADER)
+
         quad_verts = numpy.array([
             -0.5, -0.5,  0.0, 0.0,
              0.5, -0.5,  1.0, 0.0,
@@ -55,37 +52,22 @@ class StatsPanel:
         glBindVertexArray(0)
         self.quad_index_count = 6
 
-        # Font texture
-        self.font_tex = self._create_font_texture()
+        self.font_atlas = create_font_atlas(32, 2.0)
+        self.font_tex = self.font_atlas.tex_id
 
-        # Cache uniform locations
-        self.rect_uScreenSize = glGetUniformLocation(self.rect_shader, "uScreenSize")
-        self.rect_uColor = glGetUniformLocation(self.rect_shader, "uColor")
-        self.rect_uOffset = glGetUniformLocation(self.rect_shader, "uOffset")
-        self.rect_uScale = glGetUniformLocation(self.rect_shader, "uScale")
+        self.rect_uScreenSize = self.rect_shader.getUniformLocation("uScreenSize")
+        self.rect_uColor = self.rect_shader.getUniformLocation("uColor")
+        self.rect_uOffset = self.rect_shader.getUniformLocation("uOffset")
+        self.rect_uScale = self.rect_shader.getUniformLocation("uScale")
 
-        self.text_uScreenSize = glGetUniformLocation(self.text_shader, "uScreenSize")
-        self.text_uColor = glGetUniformLocation(self.text_shader, "uColor")
-        self.text_uOffset = glGetUniformLocation(self.text_shader, "uOffset")
-        self.text_uScale = glGetUniformLocation(self.text_shader, "uScale")
-        self.text_uTexRect = glGetUniformLocation(self.text_shader, "uTexRect")
-        self.text_uFontTexture = glGetUniformLocation(self.text_shader, "uFontTexture")
-
-        # Data
-        self.position = (0, 0, 0)
-        self.speed = 0.0
-        self.level = 0
-        self.life = 100
-        self.mana = 100
-        self.left_weapon = ""
-        self.left_ammo = 0
-        self.right_weapon = ""
-        self.right_ammo = 0
-        self.killed_mobs = 0
-        self.familiar_name = ""
-
-        # Table content – 3 rows x 4 columns
-        self.cells = [[""] * self.cols for _ in range(self.rows)]
+        self.text_uScreenSize = self.text_shader.getUniformLocation("uScreenSize")
+        self.text_uColor = self.text_shader.getUniformLocation("uColor")
+        self.text_uOffset = self.text_shader.getUniformLocation("uOffset")
+        self.text_uScale = self.text_shader.getUniformLocation("uScale")
+        self.text_uTexRect = self.text_shader.getUniformLocation("uTexRect")
+        self.text_uFontTexture = self.text_shader.getUniformLocation("uFontTexture")
+        self.text_uTexRect = self.text_shader.getUniformLocation("uTexRect")
+        self.text_uSmoothing = self.text_shader.getUniformLocation("uSmoothing")
 
     def _create_font_texture(self):
         cols = 16
@@ -118,98 +100,76 @@ class StatsPanel:
         self.width = width
         self.height = height
 
-    def update(self, position, speed=10.0, level=0, life=100, mana=100,
-               left_weapon='', left_ammo=0, right_weapon='', right_ammo=0,
-               killed_mobs=0, familiar_name='', auto_play=False):
-        self.position = position
-        self.speed = speed
-        self.life = life
-        self.mana = mana
-        self.left_weapon = left_weapon
-        self.left_ammo = left_ammo
-        self.right_weapon = right_weapon
-        self.right_ammo = right_ammo
-        self.familiar_name = familiar_name
-        self.level = level
-        self.killed_mobs = killed_mobs
+    def update(self, auto_play=False):
         self.auto_play = auto_play
 
         # Build table content (3 rows x 4 columns)
-        self.cells[0][0] = f"Level: {level}"
-        self.cells[0][1] = f"Pos: ({position[0]:.1f}, {position[1]:.1f}, {position[2]:.1f})"
-        self.cells[0][2] = f"Speed: {speed:.1f}"
-        self.cells[0][3] = f"Life: {life}%"
+        self.cells[0][0] = f"Level: {self.player.level}"
+        self.cells[0][1] = f"Pos: ({self.player.position[0]:.1f}, {self.player.position[1]:.1f}, {self.player.position[2]:.1f})"
+        self.cells[0][2] = f"Speed: {self.player.speed:.1f}"
+        self.cells[0][3] = f"Life: {self.player.life}%"
 
-        self.cells[1][0] = f"Mana: {mana}%"
-        self.cells[1][1] = f"L: {left_weapon} ({left_ammo if left_ammo >= 0 else '∞'})"
-        self.cells[1][2] = f"R: {right_weapon} ({right_ammo if right_ammo >= 0 else '∞'})"
-        self.cells[1][3] = f"Kills: {killed_mobs}"
+        self.cells[1][0] = f"Mana: {self.player.mana}%"
+        self.cells[1][1] = f"L: {self.player.lweapon.name} ({self.player.ammo_left if self.player.ammo_left >= 0 else '∞'})"
+        self.cells[1][2] = f"R: {self.player.rweapon.name} ({self.player.ammo_right if self.player.ammo_right >= 0 else '∞'})"
+        self.cells[1][3] = f"Kills: {self.player.killed_mobs}"
 
-        self.cells[2][0] = familiar_name
-        self.cells[2][1] = f"Auto: {'ON' if auto_play else 'OFF'}"
-        self.cells[2][2] = ""
+        self.cells[2][0] = f'{self.player.name} ({self.player.get_id()})'
+        self.cells[2][1] = self.player.familiar_name
+        self.cells[2][2] = f"Auto: {'ON' if auto_play else 'OFF'}"
         self.cells[2][3] = ""
 
     def draw(self):
         if not self.enabled:
             return
-
         glDisable(GL_DEPTH_TEST)
         glEnable(GL_BLEND)
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-
-        # Compute column widths based on maximum text width per column
         col_widths = [0] * self.cols
+        scale = (self.row_height - 2 * self.cell_padding) / self.font_atlas.pixel_height
         for row in range(self.rows):
             for col in range(self.cols):
                 text = self.cells[row][col]
-                if text is None: continue
+                if not text:
+                    continue
                 text = str(text)
-                if not text: continue
-                width = len(text) * self.char_size
+                width = 0
+                for ch in text:
+                    glyph = self.font_atlas.get_glyph(ch)
+                    if glyph:
+                        width += glyph[2] * scale
+                width = max(width, 20)
                 if width > col_widths[col]:
                     col_widths[col] = width
-
-        # Add cell padding to column widths
         for col in range(self.cols):
             col_widths[col] += 2 * self.cell_padding
-
-        # Total panel width = sum(col_widths) + 2*margin
         panel_w = sum(col_widths) + 2 * self.panel_margin
         panel_h = self.rows * self.row_height + 2 * self.panel_margin
         panel_y = self.height - panel_h - self.panel_margin
         panel_x = (self.width - panel_w) // 2   # center horizontally
-
-        # Draw background panel
-        glUseProgram(self.rect_shader)
+        self.rect_shader.use()
         glUniform2f(self.rect_uScreenSize, self.width, self.height)
         glUniform4f(self.rect_uColor, 0.0, 0.0, 0.0, 0.6)
         self._draw_rect(panel_x, panel_y, panel_w, panel_h)
-
-        # Draw table
-        glUseProgram(self.text_shader)
+        self.text_shader.use()
+        font_size = self.row_height - 2 * self.cell_padding
+        glUniform1f(self.text_uSmoothing, 0.1 / (font_size / self.font_atlas.pixel_height))
         glUniform2f(self.text_uScreenSize, self.width, self.height)
         glActiveTexture(GL_TEXTURE0)
         glBindTexture(GL_TEXTURE_2D, self.font_tex)
         glUniform1i(self.text_uFontTexture, 0)
         glUniform3f(self.text_uColor, 1.0, 1.0, 1.0)
-
-        # Starting x for columns
         start_x = panel_x + self.panel_margin
         y = panel_y + self.panel_margin + self.cell_padding
-
         for row in range(self.rows):
             x = start_x
             for col in range(self.cols):
                 text = self.cells[row][col]
-                if text is None: text = ''
-                text = str(text)
                 if text:
-                    y_center = y + self.row_height // 2 - self.char_size // 2
-                    self._draw_text(text, x + self.cell_padding, y_center, self.char_size)
+                    y_center = y + (self.row_height - font_size) // 2
+                    self._draw_text(str(text), x + self.cell_padding, y_center, font_size)
                 x += col_widths[col]
             y += self.row_height
-
         glDisable(GL_BLEND)
         glEnable(GL_DEPTH_TEST)
 
@@ -223,26 +183,23 @@ class StatsPanel:
 
     def _draw_text(self, text, x, y, size, uppercase=False):
         glBindVertexArray(self.quad_vao)
+        scale = size / self.font_atlas.pixel_height
         for i, ch in enumerate(text):
             code = ord(ch)
-            if uppercase and 97 <= code <= 122:   # a-z -> A-Z
+            if uppercase and 97 <= code <= 122:
                 code -= 32
-            if code < 32 or code > 127:
+            ch_upper = chr(code)
+            glyph = self.font_atlas.get_glyph(ch_upper)
+            if glyph is None:
                 continue
-            idx = code - 32
-            cols = 16
-            rows = 8
-            row = idx // cols
-            col = idx % cols
-            u0 = col / cols
-            v0 = row / rows
-            u1 = (col + 1) / cols
-            v1 = (row + 1) / rows
+            gw, gh, advance, u0, v0, u1, v1 = glyph
             tex_rect = (u0, v0, u1 - u0, v1 - v0)
             glUniform4f(self.text_uTexRect, *tex_rect)
-            pos_x = x + i * size
-            y_center = self.height - (y + size/2)
-            glUniform2f(self.text_uOffset, pos_x + size/2, y_center)
-            glUniform2f(self.text_uScale, size, size)
+            pos_x = x + i * advance * scale
+            quad_w = gw * scale
+            quad_h = gh * scale
+            y_bottom = self.height - (y + quad_h)
+            glUniform2f(self.text_uOffset, pos_x + quad_w/2, y_bottom + quad_h/2)
+            glUniform2f(self.text_uScale, quad_w, quad_h)
             glDrawElements(GL_TRIANGLES, self.quad_index_count, GL_UNSIGNED_INT, None)
         glBindVertexArray(0)

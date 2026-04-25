@@ -43,14 +43,23 @@ class NetworkClient:
         self._stop_event = threading.Event()
         self.chunk_size = None
         self.chunk_spacing = None
+        self.loop = None
         self._thread = threading.Thread(target=self._run_async_loop, daemon=True)
         self._thread.start()
 
     def _run_async_loop(self):
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        self.loop.create_task(self._async_main())
         try:
-            asyncio.run(self._async_main())
-        except Exception as err:
-            logging.error(f"NetworkClient background thread failed: {err}")
+            self.loop.run_forever()
+        finally:
+            self.loop.close()
+    # def _run_async_loop(self):
+    #     try:
+    #         asyncio.run(self._async_main())
+    #     except Exception as err:
+    #         logging.error(f"NetworkClient background thread failed: {err}")
 
     async def _authenticate(self):
         if self.protocol == "binary":
@@ -78,17 +87,26 @@ class NetworkClient:
         logging.info("Authentication request sent")
 
     async def _async_main(self):
+        self._stop_async_event = asyncio.Event()
+        # run receive loop in a task
+        self._receive_task = asyncio.create_task(self._receive_loop())
+        await self._stop_async_event.wait()
+        # then cleanup:
+        await self._safe_close()
+        self.loop.stop()
+
+    async def _async_main(self):
         self.ws_proto = ProtocolWebsocket(self.server_url, self.binary_proto)
         self.ws_proto.set_binary_handler(self._on_binary_message)
         self.ws_proto.client.on_text = self._on_text_message
         try:
             await self.ws_proto.connect()
-        except Exception as e:
-            logging.error(f"Failed to connect to {self.server_url}: {e}")
+        except Exception as err:
+            logging.error(f"Failed to connect to {self.server_url}: {err}")
             self._stop_event.set()
             return
         logging.info("WebSocket connected, sending protocol negotiation...")
-        if self.protocol == "binary": # Send binary protocol capabilities
+        if self.protocol == "binary":
             cap_writer = BinaryWriter()
             cap_writer.write_uint8(1)
             cap_writer.write_uint8(1)
@@ -103,43 +121,52 @@ class NetworkClient:
                 flags=ProtocolFlags.RELIABLE
             )
             await self.ws_proto.send_binary_message(msg.serialize())
-        else: # For WebSocket JSON protocol, just send a welcome message
+        else:
             await self.ws_proto.send_json({
                 "msg": "protocol_negotiation",
                 "protocol": "websocket",
                 "version": 1
             })
-        logging.info("Protocol negotiation sent")
         if self.player.name:
             await self._authenticate()
-        asyncio.create_task(self._process_requests())
-        process_task = asyncio.create_task(self._process_requests())
-        try:
-            while not self._stop_event.is_set():
-                await asyncio.sleep(0.1)
-        finally:
-            process_task.cancel()
+        self._stop_async_event = asyncio.Event()
+        self.process_task = asyncio.create_task(self._process_requests())
+        await self._stop_async_event.wait()
+        self._stop_event.set()
+        if self.process_task and not self.process_task.done():
+            self.process_task.cancel()
             try:
-                await process_task
+                await self.process_task
             except asyncio.CancelledError:
                 pass
-            await self.ws_proto.close()
+        await self._safe_close()
+        self.loop.stop()
 
     async def _process_requests(self):
         while not self._stop_event.is_set():
+            if self._request_queue.empty():
+                await asyncio.sleep(0.1)
+                continue
             try:
-                cx, cz = await asyncio.get_event_loop().run_in_executor(
-                    None, self._request_queue.get, True, 0.1
-                )
+                cx, cz = await asyncio.get_event_loop().run_in_executor(None, self._request_queue.get, True, 0.1)
                 if self._stop_event.is_set():
                     break
+                self._request_queue.task_done()
                 await self._request_chunk_async(cx, cz)
-            except queue.Empty:
-                await asyncio.sleep(0.01)
-            except (asyncio.CancelledError, RuntimeError, ConnectionError):
+            except queue.Empty as err:
+                logging.error(f"Request processing (queue.Empty): {err}")
+                await asyncio.sleep(0.1)
+            except asyncio.CancelledError as err:
+                logging.error(f"Request processing (CancelledError): {err}")
+                break
+            except RuntimeError as err:
+                logging.error(f"Request processing (RuntimeError): {err}")
+                break
+            except ConnectionError as err:
+                logging.error(f"Request processing (ConnectionError): {err}")
                 break
             except Exception as err:
-                logging.error(f"Request processing error: {err}")
+                logging.error(f"Request processing: {err}")
                 break
 
     async def _request_chunk_async(self, cx: int, cz: int):
@@ -346,14 +373,30 @@ class NetworkClient:
                 break
         return completed
 
-    def stop(self):
-        self._stop_event.set()
-        if self._thread.is_alive():
-            self._thread.join(timeout=2.0)
-
     def is_connected(self):
         return not self._stop_event.is_set() and self.ws_proto and self.ws_proto.client and not self.ws_proto.client._closed
 
     def get_remote_players_snapshot(self):
         with self.remote_players_lock:
             return dict(self.remote_players)
+
+    async def _safe_close(self):
+        if self.ws_proto and self.ws_proto.client:
+            try:
+                await asyncio.wait_for(self.ws_proto.close(1000, "client stop"), timeout=0.5)
+            except asyncio.TimeoutError:
+                pass
+            except Exception as err:
+                logging.error(f"NetworkClient._safe_close ignored: {err}")
+
+    def stop(self):
+        self._request_queue.shutdown()
+        self._stop_event.set()
+        if hasattr(self, "loop") and self.loop and not self.loop.is_closed():
+            if hasattr(self, "_stop_async_event"):
+                self.loop.call_soon_threadsafe(self._stop_async_event.set)
+        if self._thread.is_alive():
+            self._thread.join(timeout=0.5)
+
+    def __del__(self):
+        self.stop()

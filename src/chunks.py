@@ -9,104 +9,7 @@ import time
 
 from OpenGL.GL import *
 
-from camera import get_height
 from portal import Portal
-
-
-def generate_portal(cx, cz, world_origin_x, world_origin_z, phys_width, phys_height, rng):
-    """Return a portal dict or None. At most one portal per chunk."""
-    PORTAL_PROBABILITY = 0.1  # adjust as desired
-    if rng.random() >= PORTAL_PROBABILITY:
-        return None
-    margin = 2.0
-    x = world_origin_x + rng.uniform(margin, phys_width - margin)
-    z = world_origin_z + rng.uniform(margin, phys_height - margin)
-    rotation_y = rng.uniform(0, 2 * math.pi)
-    scale = rng.uniform(0.9, 1.1)
-    y = get_height(x, z)
-    name = f"{int(round(x))}_{int(round(y))}_{int(round(z))}"
-    return {
-        'name': name,
-        'x': x, 'z': z,
-        'rotation_y': rotation_y,
-        'scale': scale
-    }
-
-def generate_chunk_data(cx, cz, chunk_size, spacing):
-    phys_width = (chunk_size - 1) * spacing
-    phys_height = (chunk_size - 1) * spacing
-    world_origin_x = cx * phys_width
-    world_origin_z = cz * phys_height
-
-    # Vertex array: positions (x,y,z) and normals (nx,ny,nz)
-    vertices = numpy.zeros((chunk_size * chunk_size, 6), dtype=numpy.float32)
-    for z in range(chunk_size):
-        for x in range(chunk_size):
-            wx = world_origin_x + x * spacing
-            wz = world_origin_z + z * spacing
-            wy = get_height(wx, wz)
-            idx = z * chunk_size + x
-            vertices[idx, 0:3] = [wx, wy, wz]
-
-    # Compute normals using central differences
-    for z in range(chunk_size):
-        for x in range(chunk_size):
-            idx = z * chunk_size + x
-            if 0 < x < chunk_size - 1 and 0 < z < chunk_size - 1:
-                hx1 = vertices[(z) * chunk_size + (x + 1), 1]
-                hx2 = vertices[(z) * chunk_size + (x - 1), 1]
-                hz1 = vertices[(z + 1) * chunk_size + x, 1]
-                hz2 = vertices[(z - 1) * chunk_size + x, 1]
-                dx = hx1 - hx2
-                dz = hz1 - hz2
-                normal = numpy.array([-dx, 2.0 * spacing, -dz])
-                norm = numpy.linalg.norm(normal)
-                if norm > 0:
-                    normal /= norm
-                vertices[idx, 3:6] = normal
-            else:
-                vertices[idx, 3:6] = [0.0, 1.0, 0.0]
-
-    # Generate indices (two triangles per grid cell)
-    indices = []
-    for z in range(chunk_size - 1):
-        for x in range(chunk_size - 1):
-            i = z * chunk_size + x
-            indices.extend([i, i + 1, i + chunk_size,
-                            i + 1, i + chunk_size + 1, i + chunk_size])
-    indices = numpy.array(indices, dtype=numpy.uint32)
-
-    stones, trees = [], []
-    rng = random.Random((cx * 1000003) ^ (cz * 1000033))
-    num_items = rng.randint(5, 10)
-    for _ in range(num_items):
-        x = world_origin_x + rng.uniform(1.5, phys_width - 1.5)
-        z = world_origin_z + rng.uniform(1.5, phys_height - 1.5)
-        y = get_height(x, z)
-
-        # Random tree appearance properties
-        trunk_height = rng.uniform(1.8, 2.2)
-        foliage_radius = rng.uniform(1.0, 1.4)
-        rotation_y = rng.uniform(0, 2 * math.pi)
-
-        stones.append({
-            'x': x, 'y': y, 'z': z,
-            'trunk_height': trunk_height,
-            'foliage_radius': foliage_radius,
-            'rotation_y': rotation_y
-        })
-
-        trees.append({
-            'x': x+.5, 'y': y, 'z': z+.5,
-            'trunk_height': trunk_height,
-            'foliage_radius': foliage_radius,
-            'rotation_y': rotation_y
-        })
-
-    # Portal generation (max one)
-    portal = generate_portal(cx, cz, world_origin_x, world_origin_z, phys_width, phys_height, rng)
-
-    return (cx, cz, vertices, indices, stones, trees, portal)
 
 
 class ChunkWorker(mp.Process):
@@ -117,6 +20,76 @@ class ChunkWorker(mp.Process):
         self.chunk_size = chunk_size
         self.spacing = spacing
 
+    def _generate_height(self, x, z):
+        return (math.sin(x * 0.1) * math.cos(z * 0.1) +
+                0.3 * math.sin(x * 0.3 + 1.2) +
+                0.3 * math.cos(z * 0.3 + 2.4) +
+                0.2 * math.sin((x * 0.6 + z * 0.4) * 0.8)) * 2.0 + 0.5
+
+    def _generate_portal(self, cx, cz, world_origin_x, world_origin_z, phys_width, phys_height, rng):
+        PORTAL_PROBABILITY = 0.1
+        if rng.random() >= PORTAL_PROBABILITY:
+            return None
+        margin = 2.0
+        x = world_origin_x + rng.uniform(margin, phys_width - margin)
+        z = world_origin_z + rng.uniform(margin, phys_height - margin)
+        rotation_y = rng.uniform(0, 2 * math.pi)
+        scale = rng.uniform(0.9, 1.1)
+        y = self._generate_height(x, z)
+        name = f"{int(round(x))}_{int(round(y))}_{int(round(z))}"
+        return {'name': name, 'x': x, 'z': z, 'rotation_y': rotation_y, 'scale': scale}
+
+    def _generate_chunk_data(self, cx, cz, chunk_size, spacing):
+        phys_width = (chunk_size - 1) * spacing
+        phys_height = (chunk_size - 1) * spacing
+        world_origin_x = cx * phys_width
+        world_origin_z = cz * phys_height
+        vertices = numpy.zeros((chunk_size * chunk_size, 6), dtype=numpy.float32)
+        for z in range(chunk_size):
+            for x in range(chunk_size):
+                wx = world_origin_x + x * spacing
+                wz = world_origin_z + z * spacing
+                wy = self._generate_height(wx, wz)
+                idx = z * chunk_size + x
+                vertices[idx, 0:3] = [wx, wy, wz]
+        for z in range(chunk_size):
+            for x in range(chunk_size):
+                idx = z * chunk_size + x
+                if 0 < x < chunk_size - 1 and 0 < z < chunk_size - 1:
+                    hx1 = vertices[(z) * chunk_size + (x + 1), 1]
+                    hx2 = vertices[(z) * chunk_size + (x - 1), 1]
+                    hz1 = vertices[(z + 1) * chunk_size + x, 1]
+                    hz2 = vertices[(z - 1) * chunk_size + x, 1]
+                    dx = hx1 - hx2
+                    dz = hz1 - hz2
+                    normal = numpy.array([-dx, 2.0 * spacing, -dz])
+                    norm = numpy.linalg.norm(normal)
+                    if norm > 0:
+                        normal /= norm
+                    vertices[idx, 3:6] = normal
+                else:
+                    vertices[idx, 3:6] = [0.0, 1.0, 0.0]
+        indices = []
+        for z in range(chunk_size - 1):
+            for x in range(chunk_size - 1):
+                i = z * chunk_size + x
+                indices.extend([i, i + 1, i + chunk_size, i + 1, i + chunk_size + 1, i + chunk_size])
+        indices = numpy.array(indices, dtype=numpy.uint32)
+        stones, trees = [], []
+        rng = random.Random((cx * 1000003) ^ (cz * 1000033))
+        num_items = rng.randint(5, 10)
+        for _ in range(num_items):
+            x = world_origin_x + rng.uniform(1.5, phys_width - 1.5)
+            z = world_origin_z + rng.uniform(1.5, phys_height - 1.5)
+            y = self._generate_height(x, z)
+            trunk_height = rng.uniform(1.8, 2.2)
+            foliage_radius = rng.uniform(1.0, 1.4)
+            rotation_y = rng.uniform(0, 2 * math.pi)
+            stones.append({'x': x, 'y': y, 'z': z, 'trunk_height': trunk_height, 'foliage_radius': foliage_radius, 'rotation_y': rotation_y})
+            trees.append({'x': x+.5, 'y': y, 'z': z+.5, 'trunk_height': trunk_height, 'foliage_radius': foliage_radius, 'rotation_y': rotation_y})
+        portal = self._generate_portal(cx, cz, world_origin_x, world_origin_z, phys_width, phys_height, rng)
+        return (cx, cz, vertices, indices, stones, trees, portal)
+
     def run(self):
         while True:
             try:
@@ -124,7 +97,7 @@ class ChunkWorker(mp.Process):
                 if req is None:
                     break
                 cx, cz = req
-                data = generate_chunk_data(cx, cz, self.chunk_size, self.spacing)
+                data = self._generate_chunk_data(cx, cz, self.chunk_size, self.spacing)
                 self.result_queue.put(data)
             except queue.Empty:
                 continue
@@ -142,8 +115,7 @@ class ChunkGenerator:
         self.result_queue = mp.Queue()
         self.workers = []
         for _ in range(num_workers):
-            w = ChunkWorker(self.request_queue, self.result_queue,
-                            self.chunk_size, self.spacing)
+            w = ChunkWorker(self.request_queue, self.result_queue, self.chunk_size, self.spacing)
             w.start()
             self.workers.append(w)
 
@@ -169,32 +141,39 @@ class ChunkGenerator:
 
 class Chunk:
     def __init__(self, cx=0, cz=0, vertices=[], indices=[], stones=None, trees=None, portal=None):
-        logging.debug(f"Creating chunk ({cx},{cz}) with {len(vertices)} vertices, {len(indices)} indices")
+        #logging.debug(f"Creating chunk ({cx},{cz}) with {len(vertices)} vertices, {len(indices)} indices")
         self.cx = cx
         self.cz = cz
         self.vertices = vertices
         self.indices = indices
         self.stones = stones if stones is not None else []
         self.trees = trees if trees is not None else []
-
+        self._height_map = {}
+        if len(vertices) > 0:
+            for i in range(len(vertices)):
+                key = (round(vertices[i][0], 2), round(vertices[i][2], 2))
+                self._height_map[key] = vertices[i][1]
         if portal is not None and isinstance(portal, dict):
-            self.portal = Portal(
-                name=portal.get('name', ''),
-                base_x=portal['x'],
-                base_z=portal['z'],
-                rotation_y=portal.get('rotation_y', 0),
-                scale=portal.get('scale', 1.0)
-            )
+            self.portal = Portal(name=portal.get('name', ''), base_x=portal['x'], base_z=portal['z'],
+                                rotation_y=portal.get('rotation_y', 0), scale=portal.get('scale', 1.0))
         elif portal is not None and isinstance(portal, Portal):
             self.portal = portal
         else:
             self.portal = None
-
         self.vao = None
         self.vbo = None
         self.ebo = None
         self.vertex_count = len(indices)
         self._upload(vertices, indices)
+
+    def get_height_at(self, x, z):
+        key = (round(x, 2), round(z, 2))
+        if key in self._height_map:
+            return self._height_map[key]
+        if self._height_map:
+            closest_key = min(self._height_map.keys(), key=lambda k: (k[0]-x)**2 + (k[1]-z)**2)
+            return self._height_map[closest_key]
+        return 0.0
 
     def _upload(self, vertices, indices):
         if len(vertices) == 0 or len(indices) == 0:
@@ -214,7 +193,7 @@ class Chunk:
             glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 24, ctypes.c_void_p(12))
             glEnableVertexAttribArray(1)
             glBindVertexArray(0)
-            logging.debug(f"Chunk ({self.cx},{self.cz}) uploaded successfully to GPU")
+            #logging.debug(f"Chunk ({self.cx},{self.cz}) uploaded successfully to GPU")
         except Exception as err:
             logging.error(f"Failed to upload chunk ({self.cx},{self.cz}): {err}")
 
@@ -256,25 +235,6 @@ class ChunkManager:
         self.pending_request_time = {}
         self.request_timeout = 1.0
 
-    def _generate_sync(self, cx, cz):
-        cx, cz, vertices, indices, stones, trees, portal = generate_chunk_data(cx, cz, self.chunk_size, self.spacing)
-        return Chunk(cx, cz, vertices, indices, stones, trees, portal)
-
-    def _create_chunk_from_data(self, data):
-        cx, cz, vertices, indices, stones, trees, portal_dict = data
-        if portal_dict and self.serializer:
-            x, z = portal_dict['x'], portal_dict['z']
-            ground_y = get_height(x, z)
-            # Portal height is 3.2 * scale
-            scale = portal_dict.get('scale', 1.0)
-            center_y = ground_y + (3.2 * scale) / 2.0
-            self.serializer.save_portal(
-                portal_dict['name'], x, center_y, z,
-                portal_dict['rotation_y'],
-                scale
-            )
-        return Chunk(cx, cz, vertices, indices, stones, trees, portal_dict)
-
     def load_chunks_around(self, center_cx, center_cz):
         if not self.serializer:
             return
@@ -296,8 +256,7 @@ class ChunkManager:
         self.serializer.clear_chunks()
         for (cx, cz), chunk in self.chunks.items():
             portal_name = chunk.portal.name if chunk.portal else None
-            self.serializer.save_chunk(portal_name, cx, cz,
-                chunk.vertices, chunk.indices, chunk.stones, chunk.trees)
+            self.serializer.save_chunk(portal_name, cx, cz, chunk.vertices, chunk.indices, chunk.stones, chunk.trees)
 
     def draw(self, shader):
         for chunk in self.chunks.values():
@@ -337,8 +296,7 @@ class ChunkManager:
                 elif self.generator:
                     self.pending_requests.add(key)
                     self.generator.request_chunk(*key)
-                else:
-                    self.chunks[key] = self._generate_sync(*key)
+        missed_network_chunk_keys = []
         if self.network_client:
             for data in self.network_client.get_chunks():
                 if data is None:
@@ -367,15 +325,17 @@ class ChunkManager:
             if key in self.pending_request_time and now - self.pending_request_time[key] > self.request_timeout:
                 self.pending_requests.discard(key)
                 self.pending_request_time.pop(key, None)
-                if self.generator:
-                    self.generator.request_chunk(*key)
-                else:
-                    self.chunks[key] = self._generate_sync(*key)
-        if self.generator:
+                if key in needed and key not in self.chunks:
+                    missed_network_chunk_keys.append(key)
+                    if self.generator:
+                        self.generator.request_chunk(*key)
+        if (missed_network_chunk_keys or not self.network_client) and self.generator:
             for data in self.generator.get_chunks():
                 cx, cz, vertices, indices, stones, trees, portal = data
+                if missed_network_chunk_keys and (cx, cz) not in missed_network_chunk_keys:
+                    continue
                 key = (cx, cz)
-                if key in needed:
+                if key in needed and key not in self.chunks:
                     self.chunks[key] = Chunk(cx, cz, vertices, indices, stones, trees, portal)
                 self.pending_requests.discard(key)
                 self.pending_request_time.pop(key, None)

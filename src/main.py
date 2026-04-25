@@ -14,13 +14,15 @@ screen = Screen()
 
 from logger import logging, setup_logging
 
-import glfw
-from OpenGL.GL import *
-import numpy
+import ctypes
 import math
 import random
 import sys
-import ctypes
+import time
+
+import numpy
+import glfw
+from OpenGL.GL import *
 
 from shaders.shader import Shader
 from shaders.terrain_shdr import VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHAIR_VERT_SRC, CROSSHAIR_FRAG_SRC
@@ -675,6 +677,10 @@ def main():
 
         glfw.swap_buffers(window)
         glfw.poll_events()
+
+    if network_client:
+        network_client.stop()
+        time.sleep(1.0)  # Give the async thread time to send close frame
 
     chunk_manager.save_all_chunks()
     stone_manager.shutdown()

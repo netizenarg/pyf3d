@@ -245,14 +245,26 @@ class WebSocketClient:
         if self._closed:
             return
         self._closed = True
-        payload = struct.pack('!H', code) + reason.encode('utf-8')
-        frame = WebSocketFrame(fin=True, opcode=Opcode.CLOSE, payload=payload)
-        self.writer.write(frame.serialize())
-        await self.writer.drain()
+        if self.writer and not self.writer.is_closing():
+            try:
+                payload = struct.pack('!H', code) + reason.encode('utf-8')
+                frame = WebSocketFrame(fin=True, opcode=Opcode.CLOSE, payload=payload)
+                self.writer.write(frame.serialize())
+                await self.writer.drain()
+            except Exception as err:
+                logging.error(f'WebSocketClient.close: {err}')
         if self._receive_task:
             self._receive_task.cancel()
-        self.writer.close()
-        await self.writer.wait_closed()
+            try:
+                await self._receive_task
+            except asyncio.CancelledError as err:
+                logging.error(f'WebSocketClient.close: {err}')
+        if self.writer:
+            try:
+                self.writer.close()
+                await self.writer.wait_closed()
+            except Exception as err:
+                logging.error(f'WebSocketClient.close: {err}')
 
     async def send_text(self, text: str):
         frame = WebSocketFrame(fin=True, opcode=Opcode.TEXT, payload=text.encode('utf-8'))
@@ -264,27 +276,32 @@ class WebSocketClient:
         self.writer.write(frame.serialize())
         await self.writer.drain()
 
-    async def _receive_loop(self):
-        buffer = bytearray()
-        while not self._closed:
-            try:
-                data = await self.reader.read(4096)
-                if not data:
-                    break
-                buffer.extend(data)
-                while True:
-                    try:
-                        frame, consumed = WebSocketFrame.parse(buffer)
-                        buffer = buffer[consumed:]
-                        await self._handle_frame(frame)
-                    except (ValueError, IndexError):
-                        break
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                if self.on_close:
-                    self.on_close(1006, str(e))
-                break
+    async def _read_frame(self):
+        header = await self.reader.readexactly(2)
+        byte0 = header[0]
+        byte1 = header[1]
+        fin = (byte0 & 0x80) != 0
+        opcode = byte0 & 0x0F
+        masked = (byte1 & 0x80) != 0
+        payload_len = byte1 & 0x7F
+        if payload_len == 126:
+            ext = await self.reader.readexactly(2)
+            payload_len = struct.unpack('!H', ext)[0]
+        elif payload_len == 127:
+            ext = await self.reader.readexactly(8)
+            payload_len = struct.unpack('!Q', ext)[0]
+        masking_key = [0, 0, 0, 0]
+        if masked:
+            key_data = await self.reader.readexactly(4)
+            masking_key = list(key_data)
+        payload = await self.reader.readexactly(payload_len)
+        if masked:
+            payload = bytearray(payload)
+            for i in range(len(payload)):
+                payload[i] ^= masking_key[i % 4]
+            payload = bytes(payload)
+        frame = WebSocketFrame(fin=fin, opcode=opcode, payload=payload)
+        return frame
 
     async def _handle_frame(self, frame: WebSocketFrame):
         if frame.opcode == Opcode.CLOSE:
@@ -309,6 +326,41 @@ class WebSocketClient:
             if self.on_binary:
                 self.on_binary(frame.payload)
 
+    async def _receive_loop(self):
+        while not self._closed:
+            try:
+                try:
+                    frame = await self._read_frame()
+                except asyncio.IncompleteReadError as err:
+                    logging.error(f'WebSocketClient._receive_loop (IncompleteReadError): {err}')
+                    await self.close(1011, str(err))
+                    break
+                except IndexError as err:
+                    logging.error(f'WebSocketClient._receive_loop (IndexError): {err}')
+                    break
+                except ValueError as err:
+                    logging.error(f'WebSocketClient._receive_loop (ValueError): {err}')
+                    break
+                else:
+                    if frame is None:
+                        await self.close(1011, "frame is None, connection closed")
+                        break
+                    try:
+                        await self._handle_frame(frame)
+                    except Exception as err:
+                        logging.error(f'WebSocketClient._receive_loop (common Exception): {err}')
+                        break
+            except asyncio.CancelledError as err:
+                if err.args:
+                    logging.warning(f'WebSocketClient._receive_loop (CancelledError): {err}')
+                else:
+                    logging.debug('WebSocketClient._receive_loop close connection.')
+                break
+            except Exception as err:
+                logging.error(f'WebSocketClient._receive_loop (common Exception): {err}')
+                await self.close(1011, str(err))
+                break
+
 
 class ProtocolWebsocket:
     def __init__(self, url: str, binary_protocol):
@@ -321,8 +373,9 @@ class ProtocolWebsocket:
     async def connect(self):
         await self.client.connect()
 
-    async def close(self):
-        await self.client.close()
+    async def close(self, code: int = 1000, description: str = ""):
+        if self.client:
+            await self.client.close(code, description)
 
     def set_binary_handler(self, handler: Callable[[bytes], Any]):
         self._binary_handler = handler

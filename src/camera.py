@@ -4,8 +4,13 @@ import math
 import numpy
 import random
 
+_chunk_manager_ref = None
+
+def set_chunk_manager_ref(chunk_manager):
+    global _chunk_manager_ref
+    _chunk_manager_ref = chunk_manager
+
 def project_point(world_pos, view, proj, width, height):
-    import numpy
     p = proj @ view @ numpy.append(world_pos, 1.0)
     if p[3] == 0:
         return -1, -1
@@ -14,7 +19,17 @@ def project_point(world_pos, view, proj, width, height):
     y = (1.0 - (p[1] * 0.5 + 0.5)) * height
     return int(x), int(y)
 
-def get_height(x, z):
+def get_height(x, z, is_network=False):
+    if is_network and _chunk_manager_ref is not None:
+        if _chunk_manager_ref.network_client.chunk_size is not None:
+            phys_size = (_chunk_manager_ref.network_client.chunk_size - 1) * _chunk_manager_ref.network_client.chunk_spacing
+        else:
+            phys_size = (_chunk_manager_ref.chunk_size - 1) * _chunk_manager_ref.spacing
+        cx = int(math.floor(x / phys_size))
+        cz = int(math.floor(z / phys_size))
+        key = (cx, cz)
+        if key in _chunk_manager_ref.chunks:
+            return _chunk_manager_ref.chunks[key].get_height_at(x, z)
     return (math.sin(x * 0.1) * math.cos(z * 0.1) +
             0.3 * math.sin(x * 0.3 + 1.2) +
             0.3 * math.cos(z * 0.3 + 2.4) +

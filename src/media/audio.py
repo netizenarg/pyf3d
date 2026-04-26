@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import os
 import threading
+import time
 import logging
 
 try:
@@ -13,7 +14,6 @@ except:
 
 
 class Audio:
-    """Play sound buffers using OS built‑in audio capabilities."""
 
     def __init__(self):
         self.system = platform.system()
@@ -44,8 +44,10 @@ class Audio:
 
         self.generator = Generator()
 
+        self._stream_proc = None
+        self._stream_sample_rate = None
+
     def _samples_to_wav_bytes(self, samples, sample_rate, volume):
-        """Convert float samples to a complete WAV file in a bytes object."""
         pcm_data = []
         for s in samples:
             s = max(-1.0, min(1.0, s))
@@ -53,13 +55,11 @@ class Audio:
             pcm_value = max(-32768, min(32767, pcm_value))
             pcm_data.append(struct.pack('<h', pcm_value))
         pcm_bytes = b''.join(pcm_data)
-
         num_channels = 1
         bits_per_sample = 16
         byte_rate = sample_rate * num_channels * bits_per_sample // 8
         block_align = num_channels * bits_per_sample // 8
         data_size = len(pcm_bytes)
-
         header = struct.pack('<4sI4s4sIHHIIHH',
             b'RIFF', 36 + data_size, b'WAVE', b'fmt ',
             16, 1, num_channels, sample_rate, byte_rate,
@@ -67,15 +67,12 @@ class Audio:
         return header + pcm_bytes
 
     def play(self, samples, sample_rate=44100, volume=0.5):
-        """Play a sound buffer (list of floats)."""
         if volume != 1.0:
             samples = [s * volume for s in samples]
-
         match self.system:
             case 'Windows':
                 wav_bytes = self._samples_to_wav_bytes(samples, sample_rate, volume=1.0)
                 self.WinPlaySound(wav_bytes, self.WinPlaySoundFlags)
-
             case 'Linux':
                 pcm_bytes = b''
                 for s in samples:
@@ -83,7 +80,6 @@ class Audio:
                     pcm_value = int(s * 32767)
                     pcm_value = max(-32768, min(32767, pcm_value))
                     pcm_bytes += struct.pack('<h', pcm_value)
-
                 proc = subprocess.Popen(
                     ['aplay', '-f', 'S16_LE', '-r', str(sample_rate), '-c', '1', '-q', '--nonblock'],
                     stdin=subprocess.PIPE
@@ -91,10 +87,8 @@ class Audio:
                 proc.stdin.write(pcm_bytes)
                 proc.stdin.close()
                 proc.wait()
-
             case 'Darwin':
                 wav_bytes = self._samples_to_wav_bytes(samples, sample_rate, volume=1.0)
-
                 if self.MacNSSound and self.MacNSData:
                     sound = self.MacNSSound.alloc().initWithData_(self.MacNSData.dataWithBytes_length_(wav_bytes, len(wav_bytes)))
                     if sound:
@@ -109,18 +103,14 @@ class Audio:
                         subprocess.run(['afplay', tmp_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
                     finally:
                         os.unlink(tmp_path)
-
             case _:
                 logging.error(f"Unsupported operating system: {self.system}")
 
     def play_random(self, duration=2.0, volume=0.5, sample_rate=44100, mode='noise', **kwargs):
-        """Generate a random sound and play it."""
         samples = self.generator.generate_random(duration, volume, mode, **kwargs)
         self.play(samples, sample_rate=sample_rate, volume=1.0)
 
     def play_thread(self, samples, sample_rate=44100, volume=0.5, callback=None):
-        """Play a sound buffer in a background thread.
-        Optional callback called when playback finishes."""
         def target():
             try:
                 self.play(samples, sample_rate, volume)
@@ -128,46 +118,68 @@ class Audio:
                 logging.error(f"Playback error: {e}")
             if callback:
                 callback()
-
         thread = threading.Thread(target=target, daemon=True)
         thread.start()
         return thread
 
     def play_random_thread(self, duration=2.0, volume=0.5, sample_rate=44100,
                           mode='noise', callback=None, **kwargs):
-        """Generate a random sound and play it in a background thread.
-        Optional callback called when playback finishes."""
         def target():
             samples = self.generator.generate_random(duration, volume, mode, **kwargs)
             self.play(samples, sample_rate, volume=1.0)
             if callback:
                 callback()
-
         thread = threading.Thread(target=target, daemon=True)
         thread.start()
         return thread
 
+    def stream_start(self, sample_rate):
+        if self.system != 'Linux':
+            return
+        self.stream_stop()
+        self._stream_sample_rate = sample_rate
+        self._stream_proc = subprocess.Popen(
+            ['aplay', '-f', 'S16_LE', '-r', str(sample_rate), '-c', '1', '-q'],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
 
-if __name__ == '__main__':
-    audio = Audio()
+    def stream_write(self, pcm_bytes):
+        if self.system != 'Linux':
+            return
+        if self._stream_proc is None or self._stream_proc.poll() is not None:
+            self.stream_start(self._stream_sample_rate or 44100)
+        while True:
+            try:
+                self._stream_proc.stdin.write(pcm_bytes)
+                self._stream_proc.stdin.flush()
+                break
+            except BrokenPipeError:
+                self.stream_start(self._stream_sample_rate or 44100)
+            except OSError as e:
+                if hasattr(e, 'errno') and e.errno == 4:   # EINTR
+                    continue
+                raise
 
-    audio.play_random_thread(duration=1.0, volume=0.5, mode='sweep', min_freq=300, max_freq=1500,
-                            callback=lambda: logging.debug("Sweep finished"))
+    def stream_stop(self):
+        if self.system != 'Linux':
+            return
+        if self._stream_proc:
+            try:
+                self._stream_proc.stdin.close()
+            except:
+                pass
+            self._stream_proc.terminate()
+            try:
+                self._stream_proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                self._stream_proc.kill()
+                self._stream_proc.wait()
+            self._stream_proc = None
+        self._stream_sample_rate = None
 
-    # play white noise while doing other things
-    logging.debug("Starting threading noise...")
-    audio.play_random_thread(duration=2.0, volume=0.3, mode='noise',
-                            callback=lambda: logging.debug("Noise finished"))
-
-    logging.debug("Continuing main thread...")
-    import time
-    time.sleep(0.5)  # simulate other work
-
-    # Also play a sine wave
-    gen = Generator()
-    sine = gen.generate_sine(440, 1.5, volume=0.4)
-    audio.play_thread(sine, volume=1.0, callback=lambda: logging.debug("Sine finished"))
-
-    # Keep the main thread alive long enough to hear the sounds
-    time.sleep(3)
-    logging.debug("Main thread exiting...")
+    def is_playing(self):
+        if self.system == 'Linux':
+            return self._stream_proc is not None and self._stream_proc.poll() is None
+        return self._play_thread is not None and self._play_thread.is_alive()

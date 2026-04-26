@@ -139,7 +139,7 @@ class BitmapFontAtlas:
         pass
 
 def create_font_atlas(size=128, spread=1.2, chars=None):
-    logging.debug(f"Creating SDF atlas: size={size}, spread={spread}")
+    #logging.debug(f"Creating SDF atlas: size={size}, spread={spread}")
     try:
         return SDFFontAtlas(size, spread, chars)
     except Exception as e:

@@ -74,7 +74,7 @@ def get_height_seed(x: float, z: float, seed: int = 0) -> float:
 
 
 class Camera:
-    def __init__(self, player=None, yaw=0, mouse_sensitivity=0.002, movement_speed=10.0, mode=0, house_manager=None):
+    def __init__(self, player=None, yaw=0, mouse_sensitivity=1.0, movement_speed=10.0, mode=0, house_manager=None):
         self.ai_active = False
         self.mode = mode  # 0 = first‑person, 1 = third‑person
         self.player = player

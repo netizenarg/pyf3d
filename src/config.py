@@ -88,6 +88,8 @@ class Config:
         "draw_fog": False,
         "fog_color": [0.1, 0.2, 0.3],
         "house_probability": 0.5,
+        "play_music": True,
+        "play_sounds": True,
         "log_config": DEFAULT_LOG_CONFIG
     }
 

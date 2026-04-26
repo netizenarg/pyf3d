@@ -209,6 +209,13 @@ def main():
                 rand_y = get_height(rand_x, rand_z) + player.height
                 player.position = (rand_x, rand_y, rand_z)
 
+    music_album = Album()
+    music_album.add(Rock())
+    music_album.add(RockAndRoll())
+    music_album.add(Jazz())
+    music_album.add(Classic())
+    logging.debug(f'Album is done {glfw.get_time()}')
+
     bounding_box = BoundingBox()
 
     chunk_manager = ChunkManager(
@@ -311,7 +318,7 @@ def main():
     stats_panel = StatsPanel(screen.width, screen.height, player, draw_stats)
     fps_overlay = FPSOverlay(screen.width, screen.height, config.get("show_fps", False))
     dialog_settings = DialogSettings(window, screen.width, screen.height, config, camera,
-                                     player, stats_panel, fps_overlay, compass, player_ai)
+                                     player, stats_panel, fps_overlay, compass, player_ai, music_album)
     dialog_portals = DialogPortals(window, screen.width, screen.height, player, camera)
 
     def resize_callback(window, width, height):
@@ -465,23 +472,20 @@ def main():
         camera.process_mouse(dx, dy)
 
     glfw.set_cursor_pos_callback(window, mouse_callback)
-    # Enable raw mouse motion (relative movement regardless of cursor position)
+
     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
     is_raw_mouse_motion = glfw.raw_mouse_motion_supported()
     if is_raw_mouse_motion:
         glfw.set_input_mode(window, glfw.RAW_MOUSE_MOTION, glfw.TRUE)
     logging.debug(f'Raw mouse motion enabled={is_raw_mouse_motion}')
 
-    music_album = Album()
-    music_album.add(Rock())
-    music_album.add(RockAndRoll())
-    music_album.add(Jazz())
-    music_album.add(Classic())
-    music_album.play()
+    if config.get("play_music", False):
+        music_album.play()
 
     last_time = glfw.get_time()
     last_move_dir = numpy.array([0.0, 0.0, 0.0])
 
+    #logging.debug(f'Start main game loop {last_time}')
     while not glfw.window_should_close(window):
         prev_player_pos = numpy.array(player.position)
         current_time = glfw.get_time()
@@ -705,7 +709,7 @@ def main():
     chunk_manager.shutdown()
     player.save()
 
-    music_album.stop()
+    music_album.stop(True)
     glfw.terminate()
 
 if __name__ == "__main__":

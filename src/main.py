@@ -30,8 +30,15 @@ from shaders.terrain_shdr import VERTEX_SHADER_SRC, FRAGMENT_SHADER_SRC, CROSSHA
 from bbox import BoundingBox
 from camera import get_height, project_point
 from config import Config
-from media.audio import Audio
+
+from media.rock import Rock
+from media.rocknroll import RockAndRoll
+from media.jazz import Jazz
+from media.classic import Classic
+from media.album import Album
+
 from network.client import NetworkClient
+
 from gui.login import show_login_dialog
 from gui.msgbox import MessageBox
 from gui.settings import DialogSettings
@@ -39,6 +46,7 @@ from gui.portals import DialogPortals
 from gui.stats import StatsPanel
 from gui.fps import FPSOverlay
 from gui.compass import Compass
+
 from camera import Camera
 from chunks import ChunkManager
 from stones import StoneManager
@@ -51,6 +59,7 @@ from health import HealthManager
 from mobs import get_aimed_mob, MobManager
 from weapon import BaseAmmo, Ammo, Weapon
 from loot import LootManager
+
 from player import Player
 from player_model import PlayerModel
 from player_ai import PlayerAI
@@ -73,20 +82,14 @@ def compute_projection(width, height):
 
 def generate_window_icon():
     icon_size = 16
-    # Create a 2D list of RGBA values (each is [r, g, b, a])
     pixels = [[[0, 0, 0, 0] for _ in range(icon_size)] for _ in range(icon_size)]
-
-    # Background: dark blue
     for y in range(icon_size):
         for x in range(icon_size):
             pixels[y][x] = [30, 30, 80, 255]
-
-    # Draw a white symbol
     for y in range(4, 13):
         for x in range(4, 13):
             if y == 4 or x == 4 or (y == 8 and x <= 10):
                 pixels[y][x] = [255, 255, 255, 255]
-
     return (icon_size, icon_size, pixels)
 
 
@@ -98,6 +101,7 @@ def main():
     config = Config.load()
 
     setup_logging(config.get('log_config', {}))
+    logging.debug(f"===START APPLICATION===")
 
     db_path = config.get("db_path", "data.db")
     network_mode = config.get("network_mode", False)
@@ -132,8 +136,6 @@ def main():
     max_visible_dist = (chunk_size - 1) * (load_radius + 0.5)
     fog_start = max_visible_dist * 0.6   # 13.5
     fog_end = max_visible_dist * 0.9     # 20.25
-
-    audio = Audio()
 
     glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
     glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
@@ -275,7 +277,6 @@ def main():
 
     def change_rotation_handler(value):
         camera.rotate_only_horizontal = value
-        audio.play_random_thread(duration=1.0, volume=0.5, mode='sweep', min_freq=300, max_freq=1500)
 
     player.change_rotation_handler = change_rotation_handler
 
@@ -451,22 +452,32 @@ def main():
     first_mouse = True
 
     def mouse_callback(window, xpos, ypos):
-        nonlocal last_x, last_y, first_mouse
-        if player_ai.enabled:
+        nonlocal last_x, last_y
+        if player_ai.enabled or dialog_settings.active or dialog_portals.active:
+            last_x, last_y = xpos, ypos
             return
-        if dialog_settings.active or dialog_portals.active:
+        if last_x is None:
+            last_x, last_y = xpos, ypos
             return
-        if first_mouse:
-            last_x = xpos
-            last_y = ypos
-            first_mouse = False
         dx = xpos - last_x
         dy = last_y - ypos
-        last_x = xpos
-        last_y = ypos
+        last_x, last_y = xpos, ypos
         camera.process_mouse(dx, dy)
 
     glfw.set_cursor_pos_callback(window, mouse_callback)
+    # Enable raw mouse motion (relative movement regardless of cursor position)
+    glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
+    is_raw_mouse_motion = glfw.raw_mouse_motion_supported()
+    if is_raw_mouse_motion:
+        glfw.set_input_mode(window, glfw.RAW_MOUSE_MOTION, glfw.TRUE)
+    logging.debug(f'Raw mouse motion enabled={is_raw_mouse_motion}')
+
+    music_album = Album()
+    music_album.add(Rock())
+    music_album.add(RockAndRoll())
+    music_album.add(Jazz())
+    music_album.add(Classic())
+    music_album.play()
 
     last_time = glfw.get_time()
     last_move_dir = numpy.array([0.0, 0.0, 0.0])
@@ -516,11 +527,14 @@ def main():
                 if not mob.is_alive():
                     continue
                 dist = numpy.linalg.norm(mob.position - ammo.position)
-                if dist < 0.5 + 0.5:  # ammo radius 0.5, mob radius 0.5
+                if dist < ammo.radius + mob.collision_radius:
                     if mob.take_damage(ammo.damage): # check mob is died
+                        mob.sound_die.play()
                         player.add_kill()
-                        audio.play_random_thread(duration=0.5, volume=0.3, mode='noise')
                         mob_manager.dismantle_mob(mob, ammo.position, 1.0)
+                    else:
+                        #ammo.sound_hit.play()
+                        ammo.sound_damage.play()
                     mob_manager.add_particles(ammo.position, count=12)
                     ammo.active = False
                     break
@@ -690,6 +704,8 @@ def main():
     health_manager.shutdown()
     chunk_manager.shutdown()
     player.save()
+
+    music_album.stop()
     glfw.terminate()
 
 if __name__ == "__main__":

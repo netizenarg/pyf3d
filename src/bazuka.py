@@ -10,13 +10,18 @@ from weapon import Ammo, Weapon
 from shaders.bazuka_shdr import *
 from shaders.shader import Shader
 
+from media.sounds import LowShot, Explosion, Hit
+
 
 class BazukaAmmo(Ammo):
     """High-damage, slower ammo with orange tetrahedron visual."""
-    def __init__(self, position, direction, damage=50, speed=25.0, range_=80.0):
-        super().__init__(position, direction, damage, speed, range_)
+    def __init__(self, position, direction, speed=10.0, distance=80.0, damage=50, radius=0.5):
+        super().__init__(position, direction, speed, distance, damage, radius, empty_sounds=True)
         self._shader = Shader(BAZUKA_AMMO_VERTEX_SHADER_SRC, BAZUKA_AMMO_FRAGMENT_SHADER_SRC)
         self.init_geometry()
+        self.sound_shot = LowShot()
+        self.sound_hit = Hit()
+        self.sound_damage = Explosion()
 
     @classmethod
     def init_geometry(cls):

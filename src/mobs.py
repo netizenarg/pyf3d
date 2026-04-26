@@ -13,6 +13,8 @@ from shaders.mob_shdr import HEALTH_BAR_VERTEX, HEALTH_BAR_FRAGMENT, MOB_VERTEX_
 from shaders.ammo_shdr import PARTICLE_AMMO_EXPLOSION_VERTEX_SHADER_SRC, PARTICLE_AMMO_EXPLOSION_FRAGMENT_SHADER_SRC
 from loot_types import LOOT_TYPES
 
+from media.sounds import Groan
+
 
 def get_aimed_mob(camera, mob_manager, max_distance=50.0):
     """Return the closest mob intersected by the camera's forward ray."""
@@ -92,13 +94,12 @@ class FlyingPart:
 
 class Mob:
 
-    COLLISION_RADIUS = 0.6
-
-    def __init__(self, position, chunk_cx, chunk_cz, speed=1.5, follow_range=8.0,
-                 attack_range=2.0, damage=5, npc_type="basic"):
+    def __init__(self, position, chunk_cx, chunk_cz, collision_radius = 0.6,
+                 speed=1.5, follow_range=8.0, attack_range=2.0, damage=5, npc_type="basic"):
         self.position = numpy.array(position, dtype=float)
         self.chunk_cx = chunk_cx
         self.chunk_cz = chunk_cz
+        self.collision_radius = collision_radius
         self.speed = speed
         self.follow_range = follow_range
         self.attack_range = attack_range
@@ -108,12 +109,13 @@ class Mob:
         self.health = self.max_health
         self.attack_cooldown = 0.0
         self.loot_type = None
+        self.sound_die = Groan()
 
     def update(self, dt, player_pos, phys_size):
         dx = player_pos[0] - self.position[0]
         dz = player_pos[2] - self.position[2]
         dist = math.hypot(dx, dz)
-        if dist < self.COLLISION_RADIUS:
+        if dist < self.collision_radius:
             if dist > 0.01: # push away from player
                 push_dir_x = -dx / dist
                 push_dir_z = -dz / dist

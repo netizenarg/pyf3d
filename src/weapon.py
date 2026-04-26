@@ -9,6 +9,8 @@ from shaders.shader import Shader
 from shaders.ammo_shdr import AMMO_VERTEX_SHADER_SRC, AMMO_FRAGMENT_SHADER_SRC
 from shaders.weapon_shdr import WEAPON_VERTEX_SHADER_SRC, WEAPON_FRAGMENT_SHADER_SRC
 
+from media.sounds import Shot, Hit, Damage, Sound
+
 
 class BaseAmmo:
     """Projectile that flies forward, collides with mobs, then disappears."""
@@ -16,6 +18,7 @@ class BaseAmmo:
     _vbo = None
     _ebo = None
     _index_count = 0
+    radius = 0.1
 
     @staticmethod
     def _generate_cube(size=1.0):
@@ -72,7 +75,7 @@ class BaseAmmo:
         glBindVertexArray(0)
         cls._index_count = len(indices)
 
-    def __init__(self, position, direction, speed=10.0, distance=20.0, damage=5, shader=None):
+    def __init__(self, position, direction, speed=10.0, distance=20.0, damage=5, radius=0.1, shader=None, empty_sounds=False):
         self.position = numpy.array(position, dtype=float)
         self.direction = numpy.array(direction, dtype=float)
         norm = numpy.linalg.norm(self.direction)
@@ -81,10 +84,19 @@ class BaseAmmo:
         self.speed = speed
         self.distance = distance
         self.damage = damage
+        self.radius = radius
         self.traveled = 0.0
         self.active = True
         self.size = 0.2
         self.shader = shader if shader else Shader(AMMO_VERTEX_SHADER_SRC, AMMO_FRAGMENT_SHADER_SRC)
+        if empty_sounds:
+            self.sound_shot = Sound()
+            self.sound_hit = Sound()
+            self.sound_damage = Sound()
+        else:
+            self.sound_shot = Shot()
+            self.sound_hit = Hit()
+            self.sound_damage = Damage()
 
     def update(self, dt):
         if not self.active:
@@ -119,9 +131,9 @@ class BaseAmmo:
 class Ammo(BaseAmmo):
     """Projectile that flies forward, collides with mobs, then disappears."""
 
-    def __init__(self, position, direction, speed=30.0, distance=40.0, damage=25):
+    def __init__(self, position, direction, speed=30.0, distance=40.0, damage=25, radius=0.1, empty_sounds=False):
         shader = Shader(AMMO_VERTEX_SHADER_SRC, AMMO_FRAGMENT_SHADER_SRC)
-        super().__init__(position, direction, speed, distance, damage, shader)
+        super().__init__(position, direction, speed, distance, damage, radius, shader, empty_sounds)
 
     @staticmethod
     def _generate_sphere(radius=0.5, sectors=16, stacks=16):
@@ -148,7 +160,7 @@ class Ammo(BaseAmmo):
 
     @classmethod
     def init_geometry(cls):
-        vertices, indices = cls._generate_sphere(radius=0.5, sectors=24, stacks=24)
+        vertices, indices = cls._generate_sphere(cls.radius, sectors=24, stacks=24)
         cls._vao = glGenVertexArrays(1)
         cls._vbo = glGenBuffers(1)
         cls._ebo = glGenBuffers(1)
@@ -288,7 +300,9 @@ class BaseWeapon:
         if current_time - self.last_shot_time < self.cooldown:
             return None
         self.last_shot_time = current_time
-        return BaseAmmo(origin, direction, self.ammo_speed, self.ammo_range, self.damage)
+        ammo = BaseAmmo(origin, direction, self.ammo_speed, self.ammo_range, self.damage)
+        ammo.sound_shot.play()
+        return ammo
 
     def draw(self, view, proj, parent_matrix, local_offset):
         """Draw weapon using parent's model matrix and local offset."""

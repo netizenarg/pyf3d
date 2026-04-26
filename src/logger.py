@@ -33,4 +33,4 @@ def setup_logging(log_cfg):
 
     # Apply the dictionary configuration
     logging.config.dictConfig(log_cfg)
-    logging.debug("Logging configured via dictConfig")
+    #logging.debug("Logging configured via dictConfig")

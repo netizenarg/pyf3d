@@ -6,9 +6,9 @@ from media.music import Music
 class RockAndRoll(Music):
 
     def __init__(self, sample_rate=44100):
-        super().__init__(sample_rate)
         self._tempo = 160
-        self.generate_notes()
+        self._loop_factor = 3.0
+        super().__init__(sample_rate)
 
     def generate_notes(self):
         self.bass_line = []

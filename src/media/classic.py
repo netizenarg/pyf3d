@@ -7,6 +7,7 @@ class Classic(Music):
     def __init__(self, sample_rate=44100):
         self._tempo = 100
         self._total_beats = 256.0
+        self._loop_factor = 3.0
         super().__init__(sample_rate)
 
     def generate_notes(self):

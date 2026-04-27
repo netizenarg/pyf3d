@@ -2,10 +2,10 @@ import numpy
 from OpenGL.GL import *
 
 class Loot:
-    def __init__(self, position):
+    def __init__(self, position, pickup_timer=0.5, active=True):
         self.position = numpy.array(position, dtype=float)
-        self.active = True
         self.pickup_timer = 0.5
+        self.active = True
 
     def update(self, dt):
         if self.pickup_timer > 0:

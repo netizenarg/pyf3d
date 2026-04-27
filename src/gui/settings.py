@@ -25,7 +25,7 @@ PROTOCOL_OPTIONS = [
 
 class DialogSettings(Widget):
     def __init__(self, window, screen_width, screen_height, config_dict, camera, player=None,
-                 stats_panel=None, fps_overlay=None, compass=None, player_ai=None):
+                 stats_panel=None, fps_overlay=None, compass=None, player_ai=None, music_album=None):
         self.window = window
         self.width = screen_width
         self.height = screen_height
@@ -36,6 +36,7 @@ class DialogSettings(Widget):
         self.fps_overlay = fps_overlay
         self.compass = compass
         self.player_ai = player_ai
+        self.music_album = music_album
         self.active = False
         self.active_tab_index = 0
         self.panel_x = 50
@@ -175,6 +176,17 @@ class DialogSettings(Widget):
             else:
                 logging.warning("player_ai not available")
         player_tab.add_widget(CheckBox("Auto Play", "auto_play", 0,0,20,20, update_auto_play))
+        def update_play_music(value):
+            self.config["play_music"] = value
+            if self.music_album:
+                if value:
+                    self.music_album.resume()
+                else:
+                    self.music_album.pause()
+        def update_play_sounds(value):
+            self.config["play_sounds"] = value
+        player_tab.add_widget(CheckBox("Play Music", "play_music", 0,0,20,20, update_play_music))
+        player_tab.add_widget(CheckBox("Play Sounds", "play_sounds", 0,0,20,20, update_play_sounds))
         self.tabs.append(player_tab)
         net_tab = Tab("Network")
         def update_network_mode(value):

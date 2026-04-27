@@ -64,7 +64,7 @@ from player import Player
 from player_model import PlayerModel
 from player_ai import PlayerAI
 from remote_player import RemotePlayer
-from health_bar import HealthBarRenderer
+from health_bar import HealthBar
 from text_renderer import TextRenderer
 
 
@@ -103,7 +103,7 @@ def main():
     setup_logging(config.get('log_config', {}))
     logging.debug(f"===START APPLICATION===")
 
-    db_path = config.get("db_path", "data.db")
+    #db_path = config.get("db_path", "data.db")
     network_mode = config.get("network_mode", False)
     server_host = config.get("server_host", "localhost")
     server_port = config.get("server_port", 9999)
@@ -153,10 +153,10 @@ def main():
     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
     glEnable(GL_DEPTH_TEST)
 
-    player = Player(db_path, name=login, height=player_height, speed=movement_speed, jump_force=jump_force, gravity=gravity)
+    player = Player(config, name=login, height=player_height, speed=movement_speed, jump_force=jump_force, gravity=gravity)
 
     remote_players = {}  # player_id -> RemotePlayer
-    health_bar_renderer = HealthBarRenderer()
+    health_bar = HealthBar()
     text_renderer = TextRenderer(screen.width, screen.height)
     network_client = None
     server_url = "localhost:9999"
@@ -208,6 +208,13 @@ def main():
                 rand_z = random.uniform(-random_range, random_range)
                 rand_y = get_height(rand_x, rand_z) + player.height
                 player.position = (rand_x, rand_y, rand_z)
+
+    music_album = Album()
+    music_album.add(Rock())
+    music_album.add(RockAndRoll())
+    music_album.add(Jazz())
+    music_album.add(Classic())
+    logging.debug(f'Album is done {glfw.get_time()}')
 
     bounding_box = BoundingBox()
 
@@ -311,7 +318,7 @@ def main():
     stats_panel = StatsPanel(screen.width, screen.height, player, draw_stats)
     fps_overlay = FPSOverlay(screen.width, screen.height, config.get("show_fps", False))
     dialog_settings = DialogSettings(window, screen.width, screen.height, config, camera,
-                                     player, stats_panel, fps_overlay, compass, player_ai)
+                                     player, stats_panel, fps_overlay, compass, player_ai, music_album)
     dialog_portals = DialogPortals(window, screen.width, screen.height, player, camera)
 
     def resize_callback(window, width, height):
@@ -465,23 +472,20 @@ def main():
         camera.process_mouse(dx, dy)
 
     glfw.set_cursor_pos_callback(window, mouse_callback)
-    # Enable raw mouse motion (relative movement regardless of cursor position)
+
     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
     is_raw_mouse_motion = glfw.raw_mouse_motion_supported()
     if is_raw_mouse_motion:
         glfw.set_input_mode(window, glfw.RAW_MOUSE_MOTION, glfw.TRUE)
     logging.debug(f'Raw mouse motion enabled={is_raw_mouse_motion}')
 
-    music_album = Album()
-    music_album.add(Rock())
-    music_album.add(RockAndRoll())
-    music_album.add(Jazz())
-    music_album.add(Classic())
-    music_album.play()
+    if config.get("play_music", False):
+        music_album.play()
 
     last_time = glfw.get_time()
     last_move_dir = numpy.array([0.0, 0.0, 0.0])
 
+    #logging.debug(f'Start main game loop {last_time}')
     while not glfw.window_should_close(window):
         prev_player_pos = numpy.array(player.position)
         current_time = glfw.get_time()
@@ -529,12 +533,14 @@ def main():
                 dist = numpy.linalg.norm(mob.position - ammo.position)
                 if dist < ammo.radius + mob.collision_radius:
                     if mob.take_damage(ammo.damage): # check mob is died
-                        mob.sound_die.play()
+                        if config.get("play_sounds", False):
+                            mob.sound_die.play()
                         player.add_kill()
                         mob_manager.dismantle_mob(mob, ammo.position, 1.0)
                     else:
-                        #ammo.sound_hit.play()
-                        ammo.sound_damage.play()
+                        if config.get("play_sounds", False):
+                            #ammo.sound_hit.play()
+                            ammo.sound_damage.play()
                     mob_manager.add_particles(ammo.position, count=12)
                     ammo.active = False
                     break
@@ -629,7 +635,7 @@ def main():
         for rp in remote_players.values():
             health_percent = rp.health / rp.max_health
             if health_percent > 0:
-                health_bar_renderer.draw(rp.position, health_percent, view, proj, camera.position)
+                health_bar.draw(rp.position, health_percent, view, proj, camera.position)
             head_pos = rp.position + numpy.array([0.0, 1.5, 0.0])
             screen_x, screen_y = project_point(head_pos, view, proj, screen.width, screen.height)
             if 0 <= screen_x <= screen.width and 0 <= screen_y <= screen.height:
@@ -705,7 +711,7 @@ def main():
     chunk_manager.shutdown()
     player.save()
 
-    music_album.stop()
+    music_album.stop(True)
     glfw.terminate()
 
 if __name__ == "__main__":

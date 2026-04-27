@@ -77,10 +77,14 @@ class BazukaAmmo(Ammo):
         glBindVertexArray(0)
 
 
-class Bazuka(Loot, Weapon):
-    def __init__(self, position=None):
-        if position is not None:
-            Loot.__init__(self, position)
+class Bazuka(Weapon, Loot):
+    def __init__(self, player=None, position=[0.0, 0.0, 0.0]):
+        #if player is not None:
+        Weapon.__init__(self, player)
+        Loot.__init__(self, position)
+        # if position is not None:
+        # else:
+        #     self.position = numpy.array([0.0, 0.0, 0.0], dtype=float)
         self.rank = 2
         self.name = 'bazuka'
         self.damage = 50
@@ -159,7 +163,7 @@ class Bazuka(Loot, Weapon):
 
     @classmethod
     def from_dict(cls, data):
-        obj = cls()
+        obj = cls(data.get('player', None), numpy.array([.0,.0,.0], dtype=float))
         obj.damage = data.get('damage', 50)
         obj.ammo_speed = data.get('ammo_speed', 25.0)
         obj.ammo_range = data.get('ammo_range', 80.0)

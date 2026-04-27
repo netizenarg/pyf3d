@@ -1,8 +1,9 @@
-import json
-import numpy
-import math
 import ctypes
+import json
+import logging
+import math
 
+import numpy
 from OpenGL.GL import *
 
 from shaders.shader import Shader
@@ -176,7 +177,8 @@ class Ammo(BaseAmmo):
 
 
 class BaseWeapon:
-    def __init__(self, damage=5, ammo_speed=30.0, ammo_range=50.0, cooldown=0.1):
+    def __init__(self, player=None, damage=5, ammo_speed=30.0, ammo_range=50.0, cooldown=0.1):
+        self.player = player
         self.rank = 0
         self.name = 'rifle'
         self.damage = damage
@@ -287,7 +289,9 @@ class BaseWeapon:
 
     @classmethod
     def from_dict(cls, data):
+        logging.debug(f'{cls}.from_dict {data}')
         obj = cls()
+        obj.player = data.get('player', None)
         obj.name = data.get('name', 'rifle')
         obj.rank = data.get('rank', 0)
         obj.damage = data.get('damage', 5)
@@ -301,7 +305,8 @@ class BaseWeapon:
             return None
         self.last_shot_time = current_time
         ammo = BaseAmmo(origin, direction, self.ammo_speed, self.ammo_range, self.damage)
-        ammo.sound_shot.play()
+        if self.player.config.get("play_sounds", False):
+            ammo.sound_shot.play()
         return ammo
 
     def draw(self, view, proj, parent_matrix, local_offset):
@@ -336,10 +341,9 @@ class BaseWeapon:
 
 class Weapon(BaseWeapon):
     def __init__(self, player=None, damage=25, ammo_speed=30.0, ammo_range=50.0, cooldown=0.3):
-        super().__init__(damage, ammo_speed, ammo_range, cooldown)
+        super().__init__(player, damage, ammo_speed, ammo_range, cooldown)
         self.rank = 1
         self.name = 'gun'
-        self.player = player
         self.offset = numpy.array([0.65, 1.5, 0.3])
         self.size = 0.3
         # OpenGL resources will be initialized lazily in _init_opengl

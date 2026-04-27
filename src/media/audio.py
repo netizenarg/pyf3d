@@ -26,12 +26,13 @@ class Audio:
         match self.system:
             case 'Windows':
                 try:
-                    from winsound import PlaySound, SND_MEMORY, SND_ASYNC
+                    from winsound import PlaySound, SND_MEMORY, SND_ASYNC, SND_FILENAME
                 except Exception as err:
                     logging.error(f'{err}')
                 else:
                     self.WinPlaySound = PlaySound
                     self.WinPlaySoundFlags = SND_MEMORY | SND_ASYNC
+                    self.WinPlaySoundFilename = SND_FILENAME | SND_ASYNC
             case 'Darwin':
                 try:
                     from AppKit import NSSound
@@ -46,6 +47,8 @@ class Audio:
 
         self._stream_proc = None
         self._stream_sample_rate = None
+        self._stream_buffer = bytearray()
+        self._stream_buffer_lock = threading.Lock()
 
     def _samples_to_wav_bytes(self, samples, sample_rate, volume):
         pcm_data = []
@@ -66,12 +69,21 @@ class Audio:
             block_align, bits_per_sample, b'data', data_size)
         return header + pcm_bytes
 
+    def _pcm_to_samples(self, pcm_bytes):
+        """Convert 16-bit LE PCM bytes to list of floats in [-1,1]."""
+        count = len(pcm_bytes) // 2
+        samples = []
+        for i in range(count):
+            val = struct.unpack('<h', pcm_bytes[i*2:(i+1)*2])[0]
+            samples.append(val / 32768.0)
+        return samples
+
     def play(self, samples, sample_rate=44100, volume=0.5):
         if volume != 1.0:
             samples = [s * volume for s in samples]
         match self.system:
             case 'Windows':
-                wav_bytes = self._samples_to_wav_bytes(samples, sample_rate, volume=1.0)
+                wav_bytes = self._samples_to_wav_bytes(samples, sample_rate, volume=volume)#ATTENTION: NOT USE CONSTANT VOLUME
                 self.WinPlaySound(wav_bytes, self.WinPlaySoundFlags)
             case 'Linux':
                 pcm_bytes = b''
@@ -88,7 +100,7 @@ class Audio:
                 proc.stdin.close()
                 proc.wait()
             case 'Darwin':
-                wav_bytes = self._samples_to_wav_bytes(samples, sample_rate, volume=1.0)
+                wav_bytes = self._samples_to_wav_bytes(samples, sample_rate, volume=volume)#ATTENTION: NOT USE CONSTANT VOLUME
                 if self.MacNSSound and self.MacNSData:
                     sound = self.MacNSSound.alloc().initWithData_(self.MacNSData.dataWithBytes_length_(wav_bytes, len(wav_bytes)))
                     if sound:
@@ -133,53 +145,66 @@ class Audio:
         thread.start()
         return thread
 
-    def stream_start(self, sample_rate):
-        if self.system != 'Linux':
-            return
+    def stream_start(self, sample_rate, volume=0.5):
         self.stream_stop()
         self._stream_sample_rate = sample_rate
-        self._stream_proc = subprocess.Popen(
-            ['aplay', '-f', 'S16_LE', '-r', str(sample_rate), '-c', '1', '-q'],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
+        if self.system == 'Linux':
+            subprocess.run(['amixer', 'set', 'PCM', f'{int(volume*100)}%'],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._stream_proc = subprocess.Popen(
+                ['aplay', '-f', 'S16_LE', '-c', '1', '-q', '-r', str(sample_rate)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+        else:
+            with self._stream_buffer_lock:
+                self._stream_buffer.clear()
 
     def stream_write(self, pcm_bytes):
-        if self.system != 'Linux':
-            return
-        if self._stream_proc is None or self._stream_proc.poll() is not None:
-            self.stream_start(self._stream_sample_rate or 44100)
-        while True:
-            try:
-                self._stream_proc.stdin.write(pcm_bytes)
-                self._stream_proc.stdin.flush()
-                break
-            except BrokenPipeError:
+        if self.system == 'Linux':
+            if self._stream_proc is None or self._stream_proc.poll() is not None:
                 self.stream_start(self._stream_sample_rate or 44100)
-            except OSError as e:
-                if hasattr(e, 'errno') and e.errno == 4:   # EINTR
-                    continue
-                raise
+            while True:
+                try:
+                    self._stream_proc.stdin.write(pcm_bytes)
+                    self._stream_proc.stdin.flush()
+                    break
+                except BrokenPipeError:
+                    self.stream_start(self._stream_sample_rate or 44100)
+                except OSError as e:
+                    if hasattr(e, 'errno') and e.errno == 4:
+                        continue
+                    raise
+        else:
+            with self._stream_buffer_lock:
+                self._stream_buffer.extend(pcm_bytes)
 
     def stream_stop(self):
-        if self.system != 'Linux':
-            return
-        if self._stream_proc:
-            try:
-                self._stream_proc.stdin.close()
-            except:
-                pass
-            self._stream_proc.terminate()
-            try:
-                self._stream_proc.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                self._stream_proc.kill()
-                self._stream_proc.wait()
-            self._stream_proc = None
+        if self.system == 'Linux':
+            if self._stream_proc:
+                try:
+                    self._stream_proc.stdin.close()
+                except:
+                    pass
+                self._stream_proc.terminate()
+                try:
+                    self._stream_proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    self._stream_proc.kill()
+                    self._stream_proc.wait()
+                self._stream_proc = None
+        else:
+            with self._stream_buffer_lock:
+                pcm = bytes(self._stream_buffer)
+                self._stream_buffer.clear()
+            if pcm:
+                samples = self._pcm_to_samples(pcm)
+                self.play(samples, sample_rate=self._stream_sample_rate or 44100, volume=1.0)
         self._stream_sample_rate = None
 
     def is_playing(self):
         if self.system == 'Linux':
             return self._stream_proc is not None and self._stream_proc.poll() is None
-        return self._play_thread is not None and self._play_thread.is_alive()
+        # Non-Linux: we don't track one-shot plays started by stream_stop
+        return False

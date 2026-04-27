@@ -1,12 +1,13 @@
-# health_bar.py
-import numpy
 import math
 import ctypes
+
+import numpy
 from OpenGL.GL import *
 from shaders.shader import Shader
-from shaders.mob_shdr import HEALTH_BAR_VERTEX, HEALTH_BAR_FRAGMENT
+from shaders.health_bar_shdr import HEALTH_BAR_VERTEX, HEALTH_BAR_FRAGMENT
 
-class HealthBarRenderer:
+
+class HealthBar:
     def __init__(self):
         self.vao = None
         self.vbo = None
@@ -56,8 +57,8 @@ class HealthBarRenderer:
         glEnable(GL_DEPTH_TEST)
 
         self.shader.use()
-        glUniformMatrix4fv(glGetUniformLocation(self.shader.program, "uView"), 1, GL_TRUE, view)
-        glUniformMatrix4fv(glGetUniformLocation(self.shader.program, "uProjection"), 1, GL_TRUE, proj)
+        glUniformMatrix4fv(self.shader.getUniformLocation("uView"), 1, GL_TRUE, view)
+        glUniformMatrix4fv(self.shader.getUniformLocation("uProjection"), 1, GL_TRUE, proj)
 
         # Background (red)
         model_bg = numpy.array([
@@ -69,8 +70,8 @@ class HealthBarRenderer:
         model_bg[0, 3] = world_pos[0]
         model_bg[1, 3] = world_pos[1] + y_offset
         model_bg[2, 3] = world_pos[2]
-        glUniformMatrix4fv(glGetUniformLocation(self.shader.program, "uModel"), 1, GL_TRUE, model_bg)
-        glUniform4f(glGetUniformLocation(self.shader.program, "uColor"), 0.3, 0.0, 0.0, 0.8)
+        glUniformMatrix4fv(self.shader.getUniformLocation("uModel"), 1, GL_TRUE, model_bg)
+        glUniform4f(self.shader.getUniformLocation("uColor"), 0.3, 0.0, 0.0, 0.8)
         glBindVertexArray(self.vao)
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, None)
 
@@ -88,8 +89,8 @@ class HealthBarRenderer:
         model_fill[0, 3] = world_center_x
         model_fill[1, 3] = world_pos[1] + y_offset
         model_fill[2, 3] = world_center_z
-        glUniformMatrix4fv(glGetUniformLocation(self.shader.program, "uModel"), 1, GL_TRUE, model_fill)
-        glUniform4f(glGetUniformLocation(self.shader.program, "uColor"), 0.0, 0.8, 0.0, 0.9)
+        glUniformMatrix4fv(self.shader.getUniformLocation("uModel"), 1, GL_TRUE, model_fill)
+        glUniform4f(self.shader.getUniformLocation("uColor"), 0.0, 0.8, 0.0, 0.9)
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, None)
 
         glBindVertexArray(0)

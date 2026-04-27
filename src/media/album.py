@@ -1,14 +1,14 @@
 import logging
-import time
 import threading
+import time
 
 
 class Album:
-    
     def __init__(self):
         self._tracks = []
         self._playing = False
         self._thread = None
+        self._current_index = 0
 
     def add(self, music):
         self._tracks.append(music)
@@ -19,18 +19,38 @@ class Album:
             self._thread = threading.Thread(target=self._run, daemon=True)
             self._thread.start()
 
-    def stop(self):
+    def pause(self):
+        if self._tracks:
+            idx = self._current_index % len(self._tracks)
+            track = self._tracks[idx]
+            track.stop()
+        self._playing = False
+        logging.debug(f'Album is pausing')
+
+    def resume(self):
+        if not self._playing:
+            self._playing = True
+            self.play()
+        logging.debug(f'Album is continuing')
+
+    def stop(self, finish=False):
         self._playing = False
         for track in self._tracks:
             track.stop()
+        if finish:
+            if self._thread is not None and self._thread.is_alive():
+                self._thread.join(1)
+            self._tracks = None
+        logging.debug(f'Album is stopped')
 
     def _run(self):
+        logging.debug(f'Album is playing')
         while self._playing and self._tracks:
-            for track in self._tracks:
-                while self._playing and track.is_playing:
-                    time.sleep(0.5)
-                if not self._playing:
-                    break
-                track.play_one()
-                track._loop_finished_event.wait()
-
+            idx = self._current_index % len(self._tracks)
+            track = self._tracks[idx]
+            track.play_one()
+            track._loop_finished_event.wait()
+            while not self._playing:
+                time.sleep(1)
+                continue
+            self._current_index += 1

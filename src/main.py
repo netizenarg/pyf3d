@@ -64,7 +64,7 @@ from player import Player
 from player_model import PlayerModel
 from player_ai import PlayerAI
 from remote_player import RemotePlayer
-from health_bar import HealthBarRenderer
+from health_bar import HealthBar
 from text_renderer import TextRenderer
 
 
@@ -103,7 +103,7 @@ def main():
     setup_logging(config.get('log_config', {}))
     logging.debug(f"===START APPLICATION===")
 
-    db_path = config.get("db_path", "data.db")
+    #db_path = config.get("db_path", "data.db")
     network_mode = config.get("network_mode", False)
     server_host = config.get("server_host", "localhost")
     server_port = config.get("server_port", 9999)
@@ -153,10 +153,10 @@ def main():
     glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
     glEnable(GL_DEPTH_TEST)
 
-    player = Player(db_path, name=login, height=player_height, speed=movement_speed, jump_force=jump_force, gravity=gravity)
+    player = Player(config, name=login, height=player_height, speed=movement_speed, jump_force=jump_force, gravity=gravity)
 
     remote_players = {}  # player_id -> RemotePlayer
-    health_bar_renderer = HealthBarRenderer()
+    health_bar = HealthBar()
     text_renderer = TextRenderer(screen.width, screen.height)
     network_client = None
     server_url = "localhost:9999"
@@ -533,12 +533,14 @@ def main():
                 dist = numpy.linalg.norm(mob.position - ammo.position)
                 if dist < ammo.radius + mob.collision_radius:
                     if mob.take_damage(ammo.damage): # check mob is died
-                        mob.sound_die.play()
+                        if config.get("play_sounds", False):
+                            mob.sound_die.play()
                         player.add_kill()
                         mob_manager.dismantle_mob(mob, ammo.position, 1.0)
                     else:
-                        #ammo.sound_hit.play()
-                        ammo.sound_damage.play()
+                        if config.get("play_sounds", False):
+                            #ammo.sound_hit.play()
+                            ammo.sound_damage.play()
                     mob_manager.add_particles(ammo.position, count=12)
                     ammo.active = False
                     break
@@ -633,7 +635,7 @@ def main():
         for rp in remote_players.values():
             health_percent = rp.health / rp.max_health
             if health_percent > 0:
-                health_bar_renderer.draw(rp.position, health_percent, view, proj, camera.position)
+                health_bar.draw(rp.position, health_percent, view, proj, camera.position)
             head_pos = rp.position + numpy.array([0.0, 1.5, 0.0])
             screen_x, screen_y = project_point(head_pos, view, proj, screen.width, screen.height)
             if 0 <= screen_x <= screen.width and 0 <= screen_y <= screen.height:

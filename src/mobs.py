@@ -9,9 +9,11 @@ from OpenGL.GL.shaders import compileProgram, compileShader
 
 from camera import get_height
 from shaders.shader import Shader
-from shaders.mob_shdr import HEALTH_BAR_VERTEX, HEALTH_BAR_FRAGMENT, MOB_VERTEX_SHADER_SRC, MOB_FRAGMENT_SHADER_SRC
+from shaders.health_bar_shdr import HEALTH_BAR_VERTEX, HEALTH_BAR_FRAGMENT
 from shaders.ammo_shdr import PARTICLE_AMMO_EXPLOSION_VERTEX_SHADER_SRC, PARTICLE_AMMO_EXPLOSION_FRAGMENT_SHADER_SRC
+from shaders.mob_shdr import MOB_VERTEX_SHADER_SRC, MOB_FRAGMENT_SHADER_SRC
 from loot_types import LOOT_TYPES
+from health_bar import HealthBar
 
 from media.sounds import Groan
 
@@ -401,7 +403,7 @@ class MobManager:
         self.sphere_index_count = self.mob_model.sphere_index_count
         self.pyramid_vao = self.mob_model.pyramid_vao
         self.pyramid_index_count = self.mob_model.pyramid_index_count
-        self.dead_parts = []          # list of FlyingPart objects
+        self.dead_parts = [] # list of FlyingPart objects
 
         # Particle system
         self.particles = []
@@ -414,57 +416,11 @@ class MobManager:
         glEnableVertexAttribArray(0)
         glBindVertexArray(0)
 
-        # Health bar rendering (GUI-like)
-        self._init_health_bar_ui()
-
-    def _init_health_bar_ui(self):
-        """Create a 3D quad VAO and a simple color shader for health bars."""
-        # Quad vertices: 2D plane (width x height) lying flat in XY plane (Z=0)
-        # We'll billboard it later to face the camera.
-        vertices = numpy.array([
-            -0.5, 0.0, 0.0,   # bottom-left
-             0.5, 0.0, 0.0,   # bottom-right
-             0.5, 0.1, 0.0,   # top-right
-            -0.5, 0.1, 0.0,   # top-left
-        ], dtype=numpy.float32)
-        indices = numpy.array([0, 1, 2, 0, 2, 3], dtype=numpy.uint32)
-
-        self.health_bar_vao = glGenVertexArrays(1)
-        self.health_bar_vbo = glGenBuffers(1)
-        self.health_bar_ebo = glGenBuffers(1)
-
-        glBindVertexArray(self.health_bar_vao)
-        glBindBuffer(GL_ARRAY_BUFFER, self.health_bar_vbo)
-        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.health_bar_ebo)
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.nbytes, indices, GL_STATIC_DRAW)
-
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3*4, ctypes.c_void_p(0))
-        glEnableVertexAttribArray(0)
-        glBindVertexArray(0)
-
-        # Simple unlit shader for health bars (just color)
-        self.health_bar_shader = Shader(HEALTH_BAR_VERTEX, HEALTH_BAR_FRAGMENT)
-        self.health_bar_program = self.health_bar_shader.program
+        self.health_bar = HealthBar()
 
     def draw_health_bars(self, view, proj, camera_pos):
-        """Draw 3D health bars as billboarded quads above mobs, properly occluded by world geometry."""
         if not self.active_mobs:
             return
-        glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        glDepthMask(GL_FALSE)      # Don't write depth, but test against existing depth
-        glEnable(GL_DEPTH_TEST)    # Enable depth testing for proper occlusion
-        glUseProgram(self.health_bar_program)
-        uModel = glGetUniformLocation(self.health_bar_program, "uModel")
-        uView = glGetUniformLocation(self.health_bar_program, "uView")
-        uProjection = glGetUniformLocation(self.health_bar_program, "uProjection")
-        uColor = glGetUniformLocation(self.health_bar_program, "uColor")
-        glUniformMatrix4fv(uView, 1, GL_TRUE, view)
-        glUniformMatrix4fv(uProjection, 1, GL_TRUE, proj)
-        bar_width = 0.8
-        bar_height = 0.15
-        y_offset = 1.2
         for mobs in self.active_mobs.values():
             for mob in mobs:
                 if not mob.is_alive():
@@ -472,48 +428,8 @@ class MobManager:
                 dist = numpy.linalg.norm(camera_pos - mob.position)
                 if dist > 40.0:
                     continue
-                to_cam = camera_pos - mob.position
-                to_cam[1] = 0.0
-                norm = numpy.linalg.norm(to_cam)
-                if norm < 0.001:
-                    continue
-                to_cam /= norm
-                angle = math.atan2(to_cam[0], to_cam[2])
-                c = math.cos(angle)
-                s = math.sin(angle)
-                model_bg = numpy.array([
-                    [c * bar_width, 0, s * bar_width, 0],
-                    [0, bar_height, 0, 0],
-                    [-s * bar_width, 0, c * bar_width, 0],
-                    [0, 0, 0, 1]
-                ], dtype=numpy.float32)
-                model_bg[0, 3] = mob.position[0]
-                model_bg[1, 3] = mob.position[1] + y_offset
-                model_bg[2, 3] = mob.position[2]
-                glUniformMatrix4fv(uModel, 1, GL_TRUE, model_bg)
-                glUniform4f(uColor, 0.3, 0.0, 0.0, 0.8)
-                glBindVertexArray(self.health_bar_vao)
-                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, None)
                 health_percent = mob.health / mob.max_health
-                fill_width = bar_width * health_percent
-                local_center_x = (fill_width - bar_width) / 2.0
-                world_center_x = mob.position[0] + c * local_center_x
-                world_center_z = mob.position[2] - s * local_center_x
-                model_fill = numpy.array([
-                    [c * fill_width, 0, s * fill_width, 0],
-                    [0, bar_height, 0, 0],
-                    [-s * fill_width, 0, c * fill_width, 0],
-                    [0, 0, 0, 1]
-                ], dtype=numpy.float32)
-                model_fill[0, 3] = world_center_x
-                model_fill[1, 3] = mob.position[1] + y_offset
-                model_fill[2, 3] = world_center_z
-                glUniformMatrix4fv(uModel, 1, GL_TRUE, model_fill)
-                glUniform4f(uColor, 0.0, 0.8, 0.0, 0.9)
-                glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, None)
-        glBindVertexArray(0)
-        glDepthMask(GL_TRUE)
-        glDisable(GL_BLEND)
+                self.health_bar.draw(mob.position, health_percent, view, proj, camera_pos)
 
     def _generate_mobs_for_chunk(self, cx, cz):
         world_min_x = cx * self.phys_size
@@ -530,7 +446,6 @@ class MobManager:
             mob.max_health = random.randint(30, 80)
             mob.health = mob.max_health
             mob.damage = random.randint(8, 20)
-            #mob.loot_type = LOOT_TYPES[random.randint(0, 1)]
             if random.random() < 1.0:
                 loot_keys = list(LOOT_TYPES.keys())
                 if loot_keys:

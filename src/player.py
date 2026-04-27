@@ -1,17 +1,21 @@
 import json
-import numpy
 import logging
+
+import numpy
 
 from serializer import Serializer
 from camera import get_height
 from weapon import BaseWeapon, Weapon
 from bazuka import Bazuka
+from media.sounds import LevelUp
+
 
 class Bag:
-    def __init__(self, capacity_weapons=10):
+    def __init__(self, player=None, capacity_weapons=10):
+        self.player = player
         self.capacity_weapons = capacity_weapons
         self.portal_keys = {}
-        self.default_weapon = BaseWeapon()
+        self.default_weapon = BaseWeapon(self.player)
         self.weapons = {self.default_weapon.name: self.default_weapon}
 
     def to_dict(self):
@@ -19,17 +23,22 @@ class Bag:
         for weapon in self.weapons.values():
             weapons_list.append(weapon.to_dict())
         return {
+            'player_id': self.player.plid,
+            'player_name': self.player.name,
             'portal_keys': self.portal_keys,
             'weapons': weapons_list,
         }
 
     @classmethod
     def from_dict(cls, data):
-        bag = cls()
+        logging.debug(f'{cls}.from_dict {data}')
+        player = data.get('player', None)
+        bag = cls(player)
         bag.portal_keys = data.get('portal_keys', {})
         weapons_list = data.get('weapons', [])
         bag.weapons = {}
         for wdata in weapons_list:
+            wdata['player'] = player
             name = wdata.get('name')
             if name == 'rifle':
                 bag.weapons[name] = BaseWeapon.from_dict(wdata)
@@ -55,14 +64,15 @@ class Bag:
 
 
 class Player:
-    def __init__(self, db_path, model=None, player_id=-1, name='local-player', height=0.5, position=(0.0, 0.0, 0.0),
+    def __init__(self, config, model=None, player_id=-1, name='local-player', height=0.5, position=(0.0, 0.0, 0.0),
                  portal_position=(0.0, 0.0, 0.0), yaw=0.0, speed=0.0,
                  vertical_velocity=0.0, grounded=True,
                  jump_force=8.0, gravity=20.0,
                  life=100, life_max=100, mana=100, mana_max=100):
+        self.config = config
         self.model = model
-        self.serializer = Serializer(db_path)
-        self.bag = Bag()
+        self.serializer = Serializer(self.config.get("db_path", "data.db"))
+        self.bag = Bag(self)
         self.plid = player_id
         self.name = name
         self.height = height
@@ -88,6 +98,7 @@ class Player:
         self.movement = {'w': False, 'a': False, 's': False, 'd': False}
         self.load()
         self.change_rotation_handler = None
+        self.sound_level_up = LevelUp()
 
     @property
     def lweapon(self):
@@ -143,7 +154,9 @@ class Player:
             self.portal_position = (data.get('portal_x',0.0), data.get('portal_y',0.0), data.get('portal_z',0.0))
             self.height = data.get('height', 1.5)
             bag_json = data.get('bag', '{}')
-            self.bag = Bag.from_dict(json.loads(bag_json))
+            bag_data = json.loads(bag_json)
+            bag_data['player'] = self
+            self.bag = Bag.from_dict(bag_data)
         self.grounded = True
         self.vertical_velocity = 0.0
 
@@ -195,6 +208,8 @@ class Player:
     def add_kill(self):
         self.killed_mobs += 1
         if self.killed_mobs % 10 == 0:
+            if self.config.get("play_sounds", False):
+                self.sound_level_up.play()
             self.level += 1
             self.serializer.update('player', ('level', 'killed_mobs'), (self.level, self.killed_mobs))
             if self.level > 1:# start from this level camera.rotate_only_horizontal = False

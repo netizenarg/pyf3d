@@ -41,8 +41,9 @@ class NetworkClient:
         self._request_queue = queue.Queue()
         self._queue_chunks = queue.Queue()
         self._stop_event = threading.Event()
-        self.chunk_size = None
-        self.chunk_spacing = None
+        self.pending_chunk_size = 0
+        self.pending_chunk_spacing = 0
+        self.chunk_manager = None
         self.loop = None
         self._thread = threading.Thread(target=self._run_async_loop, daemon=True)
         self._thread.start()
@@ -55,11 +56,6 @@ class NetworkClient:
             self.loop.run_forever()
         finally:
             self.loop.close()
-    # def _run_async_loop(self):
-    #     try:
-    #         asyncio.run(self._async_main())
-    #     except Exception as err:
-    #         logging.error(f"NetworkClient background thread failed: {err}")
 
     async def _authenticate(self):
         if self.protocol == "binary":
@@ -85,15 +81,6 @@ class NetworkClient:
                 "z": self.player.position[2]
             })
         logging.info("Authentication request sent")
-
-    async def _async_main(self):
-        self._stop_async_event = asyncio.Event()
-        # run receive loop in a task
-        self._receive_task = asyncio.create_task(self._receive_loop())
-        await self._stop_async_event.wait()
-        # then cleanup:
-        await self._safe_close()
-        self.loop.stop()
 
     async def _async_main(self):
         self.ws_proto = ProtocolWebsocket(self.server_url, self.binary_proto)
@@ -169,6 +156,22 @@ class NetworkClient:
                 logging.error(f"Request processing: {err}")
                 break
 
+    def request_chunk_params(self):
+        if self.protocol == "binary":
+            writer = BinaryWriter()
+            msg = self.binary_proto.create_message(
+                MessageType.CHUNK_PARAMS,
+                writer.get_buffer(),
+                flags=ProtocolFlags.RELIABLE
+            )
+            asyncio.run_coroutine_threadsafe(self.ws_proto.send_binary_message(msg.serialize()), self.loop)
+        else:
+            asyncio.run_coroutine_threadsafe(
+                self.ws_proto.send_json({"msg": "chunk_params"}),
+                self.loop
+            )
+        logging.debug("Chunk parameters request sent")
+
     async def _request_chunk_async(self, cx: int, cz: int):
         if self._stop_event.is_set() or not self.is_connected():
             return
@@ -180,7 +183,7 @@ class NetworkClient:
             writer.write_float(round(self.player.position[1], 3))
             writer.write_float(round(self.player.position[2], 3))
             msg = self.binary_proto.create_message(
-                MessageType.CHUNK_REQUEST,
+                MessageType.CHUNK_DATA,
                 writer.get_buffer(),
                 flags=ProtocolFlags.RELIABLE
             )
@@ -214,19 +217,22 @@ class NetworkClient:
                 case MessageType.HEARTBEAT:
                     pong = self.binary_proto.create_message(MessageType.HEARTBEAT, b'')
                     await self.ws_proto.send_binary_message(pong.serialize())
+                case MessageType.CHUNK_PARAMS:
+                    reader = BinaryReader(msg.payload)
+                    self.pending_chunk_size = reader.read_uint32()
+                    self.pending_chunk_spacing = reader.read_float()
+                    if self.chunk_manager:
+                        self.chunk_manager.update_chunk_params(self.pending_chunk_size, self.pending_chunk_spacing)
+                    logging.info(f"Chunk parameters received: size={self.pending_chunk_size}, spacing={self.pending_chunk_spacing}")
                 case MessageType.CHUNK_DATA:
-                    # TODO: also need fix for valid chunk generation
-                    # see local generate_chunk_data(cx, cz, chunk_size, spacing)
                     reader = BinaryReader(msg.payload)
                     cx = reader.read_int32()
                     cz = reader.read_int32()
-                    self.chunk_size = reader.read_int32()
-                    self.chunk_spacing = reader.read_float()
                     vertices = numpy.frombuffer(reader.read_bytes(reader.read_uint32()), dtype=numpy.float32).reshape(-1, 6)
                     indices = numpy.frombuffer(reader.read_bytes(reader.read_uint32()), dtype=numpy.uint32)
                     timestamp = reader.read_uint64()
                     self._queue_chunks.put((cx, cz, vertices, indices, [], [], None))
-                    logging.debug(f"Received chunk ({cx},{cz},{self.chunk_size},{self.chunk_spacing}) with {len(vertices)} vertices")
+                    logging.debug(f"Received chunk ({cx},{cz}) with {len(vertices)} vertices")
                 case MessageType.PLAYERS_UPDATE:
                     reader = BinaryReader(msg.payload)
                     plid = reader.read_uint64()
@@ -269,6 +275,7 @@ class NetworkClient:
                         logging.info(f"Authentication successful: {message}")
                         self.authenticated = True
                         self.player.set_id(player_id)
+                        self.request_chunk_params()
                     else:
                         logging.error(f"Authentication failed: {message}")
                         self._stop_event.set()
@@ -287,11 +294,15 @@ class NetworkClient:
             data = json.loads(text)
             msg_type = data.get("msg")
             match msg_type:
+                case "chunk_params":
+                    self.pending_chunk_size = data.get("size", 32)
+                    self.pending_chunk_spacing = data.get("spacing", 1.0)
+                    logging.info(f"Chunk parameters received: size={self.pending_chunk_size}, spacing={self.pending_chunk_spacing}")
+                    if self.chunk_manager:
+                        self.chunk_manager.update_chunk_params(self.pending_chunk_size, self.pending_chunk_spacing)
                 case "get_chunk":
                     cx = data.get("x", 0)
                     cz = data.get("z", 0)
-                    self.chunk_size = data.get("size", 32)
-                    self.chunk_spacing = data.get("spacing", 1.0)
                     vertices_raw = data.get("vertices", [])
                     indices_raw = data.get("indices", [])
                     if len(vertices_raw) == 0 or len(indices_raw) == 0:
@@ -300,7 +311,7 @@ class NetworkClient:
                     vertices = numpy.array(vertices_raw, dtype=numpy.float32).reshape(-1, 6)
                     indices = numpy.array(indices_raw, dtype=numpy.uint32)
                     self._queue_chunks.put((cx, cz, vertices, indices, [], [], None))
-                    logging.debug(f"Received chunk ({cx},{cz},{self.chunk_size},{self.chunk_spacing}) with {len(vertices)} vertices")
+                    logging.debug(f"Received chunk ({cx},{cz}) with {len(vertices)} vertices")
                 case "player_spawn":
                     plid = data["player_id"]
                     name = data["name"]
@@ -347,6 +358,7 @@ class NetworkClient:
                         logging.info(f"Authentication successful: {description}")
                         self.authenticated = True
                         self.player.set_id(player_id)
+                        self.request_chunk_params()
                     else:
                         logging.error(f"Authentication failed: {description}")
                         self._stop_event.set()

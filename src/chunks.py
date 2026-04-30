@@ -6,6 +6,8 @@ import queue
 import math
 import random
 import time
+import signal
+signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 from OpenGL.GL import *
 
@@ -39,30 +41,30 @@ class ChunkWorker(mp.Process):
         name = f"{int(round(x))}_{int(round(y))}_{int(round(z))}"
         return {'name': name, 'x': x, 'z': z, 'rotation_y': rotation_y, 'scale': scale}
 
-    def _generate_chunk_data(self, cx, cz, chunk_size, spacing):
-        phys_width = (chunk_size - 1) * spacing
-        phys_height = (chunk_size - 1) * spacing
+    def _generate_chunk_data(self, cx, cz):
+        phys_width = (self.chunk_size - 1) * self.spacing
+        phys_height = (self.chunk_size - 1) * self.spacing
         world_origin_x = cx * phys_width
         world_origin_z = cz * phys_height
-        vertices = numpy.zeros((chunk_size * chunk_size, 6), dtype=numpy.float32)
-        for z in range(chunk_size):
-            for x in range(chunk_size):
-                wx = world_origin_x + x * spacing
-                wz = world_origin_z + z * spacing
+        vertices = numpy.zeros((self.chunk_size * self.chunk_size, 6), dtype=numpy.float32)
+        for z in range(self.chunk_size):
+            for x in range(self.chunk_size):
+                wx = world_origin_x + x * self.spacing
+                wz = world_origin_z + z * self.spacing
                 wy = self._generate_height(wx, wz)
-                idx = z * chunk_size + x
+                idx = z * self.chunk_size + x
                 vertices[idx, 0:3] = [wx, wy, wz]
-        for z in range(chunk_size):
-            for x in range(chunk_size):
-                idx = z * chunk_size + x
-                if 0 < x < chunk_size - 1 and 0 < z < chunk_size - 1:
-                    hx1 = vertices[(z) * chunk_size + (x + 1), 1]
-                    hx2 = vertices[(z) * chunk_size + (x - 1), 1]
-                    hz1 = vertices[(z + 1) * chunk_size + x, 1]
-                    hz2 = vertices[(z - 1) * chunk_size + x, 1]
+        for z in range(self.chunk_size):
+            for x in range(self.chunk_size):
+                idx = z * self.chunk_size + x
+                if 0 < x < self.chunk_size - 1 and 0 < z < self.chunk_size - 1:
+                    hx1 = vertices[(z) * self.chunk_size + (x + 1), 1]
+                    hx2 = vertices[(z) * self.chunk_size + (x - 1), 1]
+                    hz1 = vertices[(z + 1) * self.chunk_size + x, 1]
+                    hz2 = vertices[(z - 1) * self.chunk_size + x, 1]
                     dx = hx1 - hx2
                     dz = hz1 - hz2
-                    normal = numpy.array([-dx, 2.0 * spacing, -dz])
+                    normal = numpy.array([-dx, 2.0 * self.spacing, -dz])
                     norm = numpy.linalg.norm(normal)
                     if norm > 0:
                         normal /= norm
@@ -70,10 +72,10 @@ class ChunkWorker(mp.Process):
                 else:
                     vertices[idx, 3:6] = [0.0, 1.0, 0.0]
         indices = []
-        for z in range(chunk_size - 1):
-            for x in range(chunk_size - 1):
-                i = z * chunk_size + x
-                indices.extend([i, i + 1, i + chunk_size, i + 1, i + chunk_size + 1, i + chunk_size])
+        for z in range(self.chunk_size - 1):
+            for x in range(self.chunk_size - 1):
+                i = z * self.chunk_size + x
+                indices.extend([i, i + 1, i + self.chunk_size, i + 1, i + self.chunk_size + 1, i + self.chunk_size])
         indices = numpy.array(indices, dtype=numpy.uint32)
         stones, trees = [], []
         rng = random.Random((cx * 1000003) ^ (cz * 1000033))
@@ -90,14 +92,23 @@ class ChunkWorker(mp.Process):
         portal = self._generate_portal(cx, cz, world_origin_x, world_origin_z, phys_width, phys_height, rng)
         return (cx, cz, vertices, indices, stones, trees, portal)
 
+    def update_params(self, chunk_size, spacing):
+        self.chunk_size = chunk_size
+        self.spacing = spacing
+
     def run(self):
         while True:
             try:
                 req = self.request_queue.get(timeout=0.5)
                 if req is None:
                     break
+                if isinstance(req, tuple) and req[0] == 'UPDATE_PARAMS':
+                    _, size, spacing = req
+                    self.chunk_size = size
+                    self.spacing = spacing
+                    continue
                 cx, cz = req
-                data = self._generate_chunk_data(cx, cz, self.chunk_size, self.spacing)
+                data = self._generate_chunk_data(cx, cz)
                 self.result_queue.put(data)
             except queue.Empty:
                 continue
@@ -119,6 +130,12 @@ class ChunkGenerator:
             w.start()
             self.workers.append(w)
 
+    def update_params(self, chunk_size, spacing):
+        self.chunk_size = chunk_size
+        self.spacing = spacing
+        for _ in self.workers:
+            self.request_queue.put(('UPDATE_PARAMS', chunk_size, spacing))
+
     def request_chunk(self, cx, cz):
         self.request_queue.put((cx, cz))
 
@@ -136,7 +153,11 @@ class ChunkGenerator:
         for _ in self.workers:
             self.request_queue.put(None)
         for w in self.workers:
-            w.join(timeout=1.0)
+            w.join(timeout=2.0)
+        for w in self.workers:
+            if w.is_alive():
+                w.terminate()
+                w.join()
 
 
 class Chunk:
@@ -226,7 +247,9 @@ class ChunkManager:
         self.generator = ChunkGenerator(chunk_size, spacing)
         self.network_mode = network_mode
         self.network_client = network_client
-        if player:
+        if self.network_client:
+            self.network_client.chunk_manager = self
+        elif player:
             phys_size = (chunk_size - 1) * spacing
             player_cx = int(player.position[0] // phys_size)
             player_cz = int(player.position[2] // phys_size)
@@ -234,6 +257,21 @@ class ChunkManager:
         self.first_running = True
         self.pending_request_time = {}
         self.request_timeout = 1.0
+        self._lock = mp.Lock()
+
+    def update_chunk_params(self, chunk_size, spacing):
+        with self._lock:
+            if self.chunk_size == chunk_size and self.spacing == spacing:
+                return
+            self.chunk_size = chunk_size
+            self.spacing = spacing
+            for chunk in self.chunks.values():
+                chunk.delete()
+            self.chunks.clear()
+            self.pending_requests.clear()
+            self.pending_request_time.clear()
+            if self.generator:
+                self.generator.update_params(chunk_size, spacing)
 
     def load_chunks_around(self, center_cx, center_cz):
         if not self.serializer:
@@ -270,10 +308,7 @@ class ChunkManager:
         self.chunks.clear()
 
     def update(self, camera_pos):
-        if self.network_mode and self.network_client and self.network_client.chunk_size is not None:
-            phys_size = (self.network_client.chunk_size - 1) * self.network_client.chunk_spacing
-        else:
-            phys_size = (self.chunk_size - 1) * self.spacing
+        phys_size = (self.chunk_size - 1) * self.spacing
         cx = int(camera_pos[0] // phys_size)
         cz = int(camera_pos[2] // phys_size)
         needed = set()

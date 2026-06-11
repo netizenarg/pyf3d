@@ -187,6 +187,11 @@ class DialogSettings(Widget):
             self.config["play_sounds"] = value
         player_tab.add_widget(CheckBox("Play Music", "play_music", 0,0,20,20, update_play_music))
         player_tab.add_widget(CheckBox("Play Sounds", "play_sounds", 0,0,20,20, update_play_sounds))
+        def update_show_chat(val):
+            if self.player.chat_box:
+                self.player.chat_box.active = val
+            self.config["show_chat"] = val
+        player_tab.add_widget(CheckBox("Show Chat", "show_chat", 0,0,20,20, update_show_chat))
         self.tabs.append(player_tab)
         net_tab = Tab("Network")
         def update_network_mode(value):

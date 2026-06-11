@@ -208,11 +208,11 @@ class Camera:
             # Horizontal movement based on input
             if self.player.movement.get('w', False) or keys.get(glfw.KEY_W, False):
                 new_pos += self.front * speed
-            if keys.get(glfw.KEY_S, False):
+            if self.player.movement.get('s', False) or keys.get(glfw.KEY_S, False):
                 new_pos -= self.front * speed
-            if keys.get(glfw.KEY_A, False):
+            if self.player.movement.get('a', False) or keys.get(glfw.KEY_A, False):
                 new_pos -= self.right * speed
-            if keys.get(glfw.KEY_D, False):
+            if self.player.movement.get('d', False) or keys.get(glfw.KEY_D, False):
                 new_pos += self.right * speed
 
             # Keep current Y (physics will update it later)

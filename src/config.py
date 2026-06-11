@@ -11,7 +11,7 @@ DEFAULT_LOG_CONFIG = {
             "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         },
         "simple": {
-            "format": "%(levelname)s: %(message)s"
+            "format": "%(asctime)s - %(levelname)s: %(message)s"
         }
     },
     "handlers": {
@@ -90,6 +90,7 @@ class Config:
         "house_probability": 0.5,
         "play_music": True,
         "play_sounds": True,
+        "show_chat": True,
         "log_config": DEFAULT_LOG_CONFIG
     }
 

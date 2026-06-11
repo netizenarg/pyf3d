@@ -46,6 +46,7 @@ from gui.portals import DialogPortals
 from gui.stats import StatsPanel
 from gui.fps import FPSOverlay
 from gui.compass import Compass
+from gui.chat_box import ChatBox
 
 from camera import Camera
 from chunks import ChunkManager
@@ -93,7 +94,9 @@ def generate_window_icon():
     return (icon_size, icon_size, pixels)
 
 
-def main():
+def run_game():
+
+    return_command = 'quit'
 
     if not glfw.init():
         sys.exit("Failed to initialize GLFW")
@@ -191,6 +194,7 @@ def main():
                 network_client = None
             else:
                 logging.info(f"NetworkClient running...")
+                network_client.set_chat_callback(lambda sender, msg, ts: chat_box.add_message(sender, msg, ts))
         if not login_cancelled:
             glfw.set_input_mode(window, glfw.CURSOR, glfw.CURSOR_DISABLED)
 
@@ -314,6 +318,9 @@ def main():
     player_ai = PlayerAI(player, camera, mob_manager, health_manager, loot_manager, weapon, auto_play)
     player_ai.set_ammo_list(ammo_list)
 
+    chat_box = ChatBox(screen.width, screen.height, network_client, config.get("show_chat", True))
+    player.set_chat_box(chat_box)
+
     compass = Compass(screen.width, screen.height, camera, draw_compass, compass_scale)
     stats_panel = StatsPanel(screen.width, screen.height, player, draw_stats)
     fps_overlay = FPSOverlay(screen.width, screen.height, config.get("show_fps", False))
@@ -331,6 +338,7 @@ def main():
         dialog_settings.resize(width, height)
         proj = compute_projection(width, height)
         text_renderer.resize(width, height)
+        chat_box.resize(width, height)
 
     glfw.set_window_size_callback(window, resize_callback)
 
@@ -341,6 +349,9 @@ def main():
         if dialog_settings.active:
             if dialog_settings.handle_key(0, char):
                 return
+        if chat_box.focus_captured:
+            chat_box.handle_key(0, char)
+
     glfw.set_char_callback(window, char_callback)
 
     def scroll_callback(window, xoffset, yoffset):
@@ -351,13 +362,21 @@ def main():
         if dialog_settings.active:
             if dialog_settings.handle_key(key, ''):
                 return
+        if chat_box.focus_captured:
+            if action == glfw.PRESS:
+                chat_box.handle_key(key, '')
+            return
         if action == glfw.RELEASE:
             keys[key] = False
             if key == glfw.KEY_ESCAPE:
                 glfw.set_window_should_close(window, True)
         elif action == glfw.PRESS:
             keys[key] = True
-            if key == glfw.KEY_F3:
+            if key == glfw.KEY_F2:
+                chat_box.active = not chat_box.active
+                config["show_chat"] = chat_box.active
+                Config.save(config)
+            elif key == glfw.KEY_F3:
                 bounding_box.enabled = not bounding_box.enabled
             elif key == glfw.KEY_F4:
                 enabled = player_ai.toggle()
@@ -408,6 +427,12 @@ def main():
                     camera.position = numpy.array([player.position[0], eye_y, player.position[2]])
                     camera.update_vectors()
                 camera.set_mode(1 - camera.mode)
+            elif key == glfw.KEY_ENTER:
+                if chat_box.active:
+                    chat_box.handle_key(key, '')
+            elif key == glfw.KEY_ESCAPE:
+                #if network_client: network_client.close()
+                logging.debug("Exiting from application...")
 
     def mouse_button_callback(window, button, action, mods):
         if action == glfw.PRESS:
@@ -459,6 +484,8 @@ def main():
     first_mouse = True
 
     def mouse_callback(window, xpos, ypos):
+        if chat_box.focus_captured:
+            return
         nonlocal last_x, last_y
         if player_ai.enabled or dialog_settings.active or dialog_portals.active:
             last_x, last_y = xpos, ypos
@@ -484,6 +511,7 @@ def main():
 
     last_time = glfw.get_time()
     last_move_dir = numpy.array([0.0, 0.0, 0.0])
+    last_pos_send = 0.0
 
     #logging.debug(f'Start main game loop {last_time}')
     while not glfw.window_should_close(window):
@@ -495,19 +523,13 @@ def main():
         speed_mult = 0.5 if player_ai.enabled else 1.0
         view, forward = camera.update(keys, dt, speed_mult, player_ai.enabled)
 
-        chunk_manager.update(camera.position)
-
         if network_client:
             remote_players = network_client.get_remote_players_snapshot()
-            # player_updates = network_client.get_player_updates()
-            # for update in player_updates:
-            #     for (plid, pos, yaw, health, max_health, name) in update:
-            #         if plid == player.get_id():
-            #             continue
-            #         if plid in remote_players:
-            #             remote_players[plid].update(pos, yaw, health, max_health)
-            #         else:
-            #             remote_players[plid] = RemotePlayer(plid, name, pos, yaw, health, max_health)
+            if time.time() - last_pos_send > 0.5:
+                network_client.send_player_position(*player.position)
+                last_pos_send = time.time()
+
+        chunk_manager.update(camera.position)
 
         stone_manager.update()
         tree_manager.update()
@@ -548,7 +570,47 @@ def main():
         player.speed = numpy.linalg.norm(numpy.array(player.position) - prev_player_pos) / dt if dt > 0 else 0.0
 
         if player_ai.enabled:
-            player_ai.update(dt, current_time)
+            nearest_mob = None
+            nearest_mob_dist = 100.0
+            for mobs in mob_manager.active_mobs.values():
+                for mob in mobs:
+                    if not mob.is_alive():
+                        continue
+                    dx = mob.position[0] - player.position[0]
+                    dz = mob.position[2] - player.position[2]
+                    dist = math.hypot(dx, dz)
+                    if dist < nearest_mob_dist:
+                        nearest_mob_dist = dist
+                        nearest_mob = mob
+
+            nearest_health = None
+            nearest_health_dist = 50.0
+            for item in health_manager.active_items.values():
+                if item.collected:
+                    continue
+                pos = item.get_world_position()
+                dx = pos[0] - player.position[0]
+                dz = pos[2] - player.position[2]
+                dist = math.hypot(dx, dz)
+                if dist < nearest_health_dist:
+                    nearest_health_dist = dist
+                    nearest_health = item
+
+            nearest_loot = None
+            nearest_loot_dist = 50.0
+            for item in loot_manager.loot_items:
+                if hasattr(item, 'collected') and item.collected:
+                    continue
+                if hasattr(item, 'active') and not item.active:
+                    continue
+                dx = item.position[0] - player.position[0]
+                dz = item.position[2] - player.position[2]
+                dist = math.hypot(dx, dz)
+                if dist < nearest_loot_dist:
+                    nearest_loot_dist = dist
+                    nearest_loot = item
+
+            player_ai.update(dt, current_time, nearest_mob, nearest_health, nearest_loot)
 
         if stats_panel.enabled:
             stats_panel.update(auto_play=player_ai.enabled)
@@ -585,11 +647,14 @@ def main():
         mob_manager.draw(view, proj, light_dir, light_intensity, screen.width, screen.height)
         loot_manager.draw(view, proj)
 
-        for rp in remote_players.values():
-            cx = int(rp.position[0] // chunk_manager.phys_width)
-            cz = int(rp.position[2] // chunk_manager.phys_height)
-            if (cx, cz) in chunk_manager.chunks:
+        if remote_players:
+            #phys_size = (chunk_manager.chunk_size - 1) * chunk_manager.spacing
+            for rp in remote_players.values():
                 rp.draw(view, proj, light_dir, light_intensity)
+                #cx = int(rp.position[0] // phys_size)
+                #cz = int(rp.position[2] // phys_size)
+                #if (cx, cz) in chunk_manager.chunks:
+                    #rp.draw(view, proj, light_dir, light_intensity)
 
         for target in targets:
             target.draw(shader_3d, view, proj, light_dir)
@@ -694,12 +759,19 @@ def main():
         fps_overlay.draw(dt)
         dialog_settings.draw()
         dialog_portals.draw()
+        chat_box.draw()
 
         glfw.swap_buffers(window)
         glfw.poll_events()
 
+        if network_client and not network_client.is_connected():
+            logging.warning("Connection lost. Returning to login.")
+            return_command = 'reconnect'
+            glfw.set_window_should_close(window, True)
+            break
+
     if network_client:
-        network_client.stop()
+        network_client.close()
         time.sleep(1.0)  # Give the async thread time to send close frame
 
     chunk_manager.save_all_chunks()
@@ -713,6 +785,15 @@ def main():
 
     music_album.stop(True)
     glfw.terminate()
+    return return_command
+
+
+def main():
+    while True:
+        result = run_game()
+        if result == 'quit':
+            break
+
 
 if __name__ == "__main__":
     main()

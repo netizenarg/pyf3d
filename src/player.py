@@ -68,7 +68,7 @@ class Player:
                  portal_position=(0.0, 0.0, 0.0), yaw=0.0, speed=0.0,
                  vertical_velocity=0.0, grounded=True,
                  jump_force=8.0, gravity=20.0,
-                 life=100, life_max=100, mana=100, mana_max=100):
+                 life=100, life_max=100, mana=100, mana_max=100, chat_box=None):
         self.config = config
         self.model = model
         self.serializer = Serializer(self.config.get("db_path", "data.db"))
@@ -99,6 +99,7 @@ class Player:
         self.load()
         self.change_rotation_handler = None
         self.sound_level_up = LevelUp()
+        self.chat_box = chat_box
 
     @property
     def lweapon(self):
@@ -222,7 +223,7 @@ class Player:
         self.model = model
 
     def draw(self, view, proj, light_dir, light_intensity):
-        self.model.draw(self.position, self.yaw, view, proj, light_dir, light_intensity)
+        self.model.draw((self.position[0], self.position[1] - self.height, self.position[2]), self.yaw, view, proj, light_dir, light_intensity)
 
     def jump(self):
         if self.grounded:
@@ -242,3 +243,6 @@ class Player:
         pos_list = list(self.position)
         pos_list[1] = new_y
         self.position = tuple(pos_list)
+
+    def set_chat_box(self, value):
+        self.chat_box = value

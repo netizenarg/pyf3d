@@ -13,7 +13,7 @@ from typing import Optional, Callable, Any, Tuple
 
 class Opcode(IntEnum):
     CONTINUATION = 0x0
-    TEXT = 0x1
+    JSON = 0x1
     BINARY = 0x2
     CLOSE = 0x8
     PING = 0x9
@@ -126,13 +126,13 @@ class WebSocketClient:
         self.writer: Optional[asyncio.StreamWriter] = None
         self._closed = False
         self._receive_task: Optional[asyncio.Task] = None
-
-        self.on_text: Optional[Callable[[str], None]] = None
+        self.on_json: Optional[Callable[[str], None]] = None
         self.on_binary: Optional[Callable[[bytes], None]] = None
         self.on_close: Optional[Callable[[int, str], None]] = None
+        self._message_buffer = b''
+        self._message_opcode = None
 
     async def connect(self):
-        # Parse URL
         if self.url.startswith("ws://"):
             rest = self.url[5:]
             use_ssl = False
@@ -144,7 +144,6 @@ class WebSocketClient:
         else:
             raise ValueError("URL must start with ws:// or wss://")
 
-        # Split host/path
         if '/' in rest:
             host_part, path = rest.split('/', 1)
             path = '/' + path
@@ -152,9 +151,7 @@ class WebSocketClient:
             host_part = rest
             path = '/'
 
-        # Split host and port
         if ':' in host_part:
-            # IPv6 address with brackets?
             if host_part.startswith('['):
                 bracket_end = host_part.find(']')
                 if bracket_end == -1:
@@ -166,19 +163,16 @@ class WebSocketClient:
                 else:
                     port = default_port
             else:
-                # IPv4 or hostname with port
                 host, port_str = host_part.split(':', 1)
                 port = int(port_str)
         else:
             host = host_part
             port = default_port
 
-        # Replace localhost with 127.0.0.1 to avoid DNS issues
         if host == "localhost":
             host = "127.0.0.1"
             logging.debug("Replaced localhost with 127.0.0.1")
 
-        # Open connection
         try:
             if use_ssl:
                 if self.ssl_context is None:
@@ -190,7 +184,6 @@ class WebSocketClient:
         except Exception as e:
             raise ConnectionError(f"Failed to connect {host}:{port}: {e}")
 
-        # WebSocket handshake
         key = base64.b64encode(os.urandom(16)).decode()
         expected_accept = base64.b64encode(
             hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
@@ -208,11 +201,9 @@ class WebSocketClient:
         self.writer.write(handshake.encode())
         await self.writer.drain()
 
-        # Read HTTP response
         response = await self.reader.readuntil(b"\r\n\r\n")
         response_str = response.decode()
 
-        # Parse status line
         lines = response_str.splitlines()
         if not lines:
             raise ConnectionError("Empty response")
@@ -220,7 +211,6 @@ class WebSocketClient:
         if "101" not in status_line:
             raise ConnectionError(f"Handshake failed: {status_line}")
 
-        # Parse headers (case‑insensitive)
         headers = {}
         for line in lines[1:]:
             if ':' not in line:
@@ -235,13 +225,14 @@ class WebSocketClient:
         logging.debug(f"Server accept key: {accept}")
         logging.debug(f"Expected accept key: {expected_accept}")
 
-        # Compare after normalizing (strip any extra whitespace)
         if accept != expected_accept:
             raise ConnectionError(f"Invalid accept key: expected '{expected_accept}', got '{accept}'")
 
         self._receive_task = asyncio.create_task(self._receive_loop())
+        #logging.debug(f"WebSocketClient.connect: receive task created {self._receive_task}")
 
     async def close(self, code: int = 1000, reason: str = ""):
+        #logging.debug(f"WebSocketClient.close({code}, {reason})")
         if self._closed:
             return
         self._closed = True
@@ -266,8 +257,13 @@ class WebSocketClient:
             except Exception as err:
                 logging.error(f'WebSocketClient.close: {err}')
 
+    async def send_ping(self, payload=b''):
+        frame = WebSocketFrame(fin=True, opcode=Opcode.PING, payload=payload)
+        self.writer.write(frame.serialize())
+        await self.writer.drain()
+
     async def send_text(self, text: str):
-        frame = WebSocketFrame(fin=True, opcode=Opcode.TEXT, payload=text.encode('utf-8'))
+        frame = WebSocketFrame(fin=True, opcode=Opcode.JSON, payload=text.encode('utf-8'))
         self.writer.write(frame.serialize())
         await self.writer.drain()
 
@@ -277,7 +273,14 @@ class WebSocketClient:
         await self.writer.drain()
 
     async def _read_frame(self):
+        #logging.debug("WebSocketClient._read_frame ========== STARTED ==========")
         header = await self.reader.readexactly(2)
+        # try:
+        #     header = await asyncio.wait_for(self.reader.readexactly(2), timeout=0.5)
+        # except asyncio.TimeoutError:
+        #     logging.error("WebSocketClient._read_frame: TIMEOUT")
+        #     return None
+        # logging.debug(f"WebSocketClient._read_frame: header={header.hex()}")
         byte0 = header[0]
         byte1 = header[1]
         fin = (byte0 & 0x80) != 0
@@ -301,9 +304,22 @@ class WebSocketClient:
                 payload[i] ^= masking_key[i % 4]
             payload = bytes(payload)
         frame = WebSocketFrame(fin=fin, opcode=opcode, payload=payload)
+        #logging.debug("WebSocketClient._read_frame ========== FINISHED ==========")
         return frame
 
+    def _deliver_message(self):
+        if self._message_opcode == Opcode.JSON and self.on_json:
+            #self.on_json(self._message_buffer.decode('utf-8'))
+            text = self._message_buffer.decode('utf-8')
+            logging.info(f"WebSocketClient._deliver_message: {text[:30]}")
+            self.on_json(text)
+        elif self._message_opcode == Opcode.BINARY and self.on_binary:
+            self.on_binary(self._message_buffer)
+        self._message_buffer = b''
+        self._message_opcode = None
+
     async def _handle_frame(self, frame: WebSocketFrame):
+        logging.debug(f"WebSocketClient._handle_frame: opcode={frame.opcode}, len={len(frame.payload)}")
         if frame.opcode == Opcode.CLOSE:
             code = 1000
             reason = ""
@@ -319,14 +335,26 @@ class WebSocketClient:
             await self.writer.drain()
         elif frame.opcode == Opcode.PONG:
             pass
-        elif frame.opcode == Opcode.TEXT:
-            if self.on_text:
-                self.on_text(frame.payload.decode('utf-8'))
+        elif frame.opcode == Opcode.JSON:
+            logging.debug(f"HANDLING JSON frame")
+            self._message_buffer = frame.payload
+            self._message_opcode = Opcode.JSON
+            if frame.fin:
+                self._deliver_message()
         elif frame.opcode == Opcode.BINARY:
             if self.on_binary:
                 self.on_binary(frame.payload)
+        elif frame.opcode == Opcode.CONTINUATION:
+            if self._message_opcode is None:
+                return # Protocol error – ignore
+            self._message_buffer += frame.payload
+            if frame.fin:
+                self._deliver_message()
+        else:
+            pass # Unknown opcode – ignore
 
     async def _receive_loop(self):
+        logging.debug("WebSocketClient._receive_loop ========== STARTED ==========")
         while not self._closed:
             try:
                 try:
@@ -345,6 +373,13 @@ class WebSocketClient:
                     if frame is None:
                         await self.close(1011, "frame is None, connection closed")
                         break
+                    ###########################################################################################
+                    logging.debug(f"WebSocketClient._receive_loop: RECEIVED FRAME opcode={frame.opcode}, payload_len={len(frame.payload)}")
+                    if frame.opcode == Opcode.JSON:
+                        logging.debug(f"JSON text: {frame.payload[:200]}")
+                    elif frame.opcode == Opcode.BINARY:
+                        logging.debug(f"WebSocketClient._receive_loop: binary payload first 20 bytes <{frame.payload[:20].hex()}>")
+                    ###########################################################################################
                     try:
                         await self._handle_frame(frame)
                     except Exception as err:
@@ -360,6 +395,7 @@ class WebSocketClient:
                 logging.error(f'WebSocketClient._receive_loop (common Exception): {err}')
                 await self.close(1011, str(err))
                 break
+        logging.debug("WebSocketClient._receive_loop ========== FINISHED ==========")
 
 
 class ProtocolWebsocket:
